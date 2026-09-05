@@ -152,17 +152,50 @@ def _preprocessing_block(pipeline: PreprocessingPipeline | None, needs_target: b
         lines.append("preprocessor = None")
         return "\n".join(lines)
 
-    imports, stages = _pipeline_stages(column_steps)
-    lines += ["", *sorted(imports), "from sklearn.pipeline import Pipeline", ""]
+    imports, stages, inline = _pipeline_stages(column_steps)
+    lines += ["", *sorted(imports), "from sklearn.pipeline import Pipeline",
+              "from sklearn.base import BaseEstimator, TransformerMixin", ""]
+    lines += ["", _inline_transformer_source(inline), ""]
     lines.append("preprocessor = Pipeline([")
     lines += [f"    {stage}," for stage in stages]
     lines.append("])")
     return "\n".join(lines)
 
 
-def _pipeline_stages(column_steps) -> tuple[set[str], list[str]]:
+def _inline_transformer_source(names: set[str]) -> str:
+    """Copy the source of the custom transformers into the exported script.
+
+    Importing them from this package would make the script depend on the very
+    platform it is meant to replace, so the source travels with it instead.
+    """
+    import inspect
+
+    from dsai.preprocessing import transformers as T
+
+    ordered = ["_as_frame"] + sorted(n for n in names if n != "_as_frame")
+    blocks = [
+        "# " + "-" * 74,
+        "# Transformers copied from the platform so this script stands alone.",
+        "# " + "-" * 74,
+        "from typing import Any",
+    ]
+    for name in ordered:
+        member = getattr(T, name, None)
+        if member is None:
+            continue
+        try:
+            blocks.append(inspect.getsource(member).rstrip())
+        except (OSError, TypeError):
+            continue
+    return "\n\n\n".join(blocks)
+
+
+def _pipeline_stages(column_steps) -> tuple[set[str], list[str], set[str]]:
     """Translate pipeline steps into readable sklearn constructor calls."""
-    imports = {"from dsai.preprocessing.transformers import FrameTransformer, NumericCoercer"}
+    # Custom transformers are inlined as source rather than imported, so the
+    # exported script runs anywhere pandas and scikit-learn are installed.
+    imports: set[str] = set()
+    needed_inline: set[str] = {"FrameTransformer", "NumericCoercer"}
     stages: list[str] = []
     mapping = {
         "impute_mean": ("from sklearn.impute import SimpleImputer", "SimpleImputer(strategy='mean')"),
@@ -184,25 +217,21 @@ def _pipeline_stages(column_steps) -> tuple[set[str], list[str]]:
         "polynomial_features": ("from sklearn.preprocessing import PolynomialFeatures",
                                 "PolynomialFeatures(degree={degree}, include_bias=False)"),
         "pca_reduce": ("from sklearn.decomposition import PCA", "PCA(n_components={n_components}, random_state=42)"),
-        "log_transform": ("from dsai.preprocessing.transformers import LogTransformer", "LogTransformer()"),
-        "target_encode": ("from dsai.preprocessing.transformers import TargetEncoder",
-                          "TargetEncoder(smoothing={smoothing})"),
-        "frequency_encode": ("from dsai.preprocessing.transformers import FrequencyEncoder", "FrequencyEncoder()"),
-        "datetime_features": ("from dsai.preprocessing.transformers import DateTimeFeatures", "DateTimeFeatures()"),
-        "text_features": ("from dsai.preprocessing.transformers import TextFeatures", "TextFeatures()"),
-        "group_rare_categories": ("from dsai.preprocessing.transformers import RareCategoryGrouper",
-                                  "RareCategoryGrouper(min_frequency={min_frequency})"),
-        "winsorize": ("from dsai.preprocessing.transformers import WinsorizeTransformer",
-                      "WinsorizeTransformer({lower_quantile}, {upper_quantile})"),
-        "clip_iqr": ("from dsai.preprocessing.transformers import OutlierClipTransformer",
-                     "OutlierClipTransformer({factor})"),
+        "log_transform": ("@LogTransformer", "LogTransformer()"),
+        "target_encode": ("@TargetEncoder", "TargetEncoder(smoothing={smoothing})"),
+        "frequency_encode": ("@FrequencyEncoder", "FrequencyEncoder()"),
+        "datetime_features": ("@DateTimeFeatures", "DateTimeFeatures()"),
+        "text_features": ("@TextFeatures", "TextFeatures()"),
+        "group_rare_categories": ("@RareCategoryGrouper", "RareCategoryGrouper(min_frequency={min_frequency})"),
+        "winsorize": ("@WinsorizeTransformer", "WinsorizeTransformer({lower_quantile}, {upper_quantile})"),
+        "clip_iqr": ("@OutlierClipTransformer", "OutlierClipTransformer({factor})"),
     }
 
     for i, step in enumerate(column_steps):
         name = f"{i:02d}_{step.step_key}"
         columns = step.columns
         if step.step_key == "drop_columns":
-            imports.add("from dsai.preprocessing.transformers import ColumnSelector")
+            needed_inline.add("ColumnSelector")
             stages.append(f"('{name}', ColumnSelector(columns={columns!r}, mode='drop'))")
             continue
         entry = mapping.get(step.step_key)
@@ -210,7 +239,10 @@ def _pipeline_stages(column_steps) -> tuple[set[str], list[str]]:
             stages.append(f"# ('{name}', ...)  # {step.spec.name} — add manually if needed")
             continue
         import_line, template = entry
-        imports.add(import_line)
+        if import_line.startswith("@"):
+            needed_inline.add(import_line[1:])
+        else:
+            imports.add(import_line)
         params = {**step.spec.default_params(), **step.params}
         try:
             inner = template.format(**params)
@@ -219,7 +251,7 @@ def _pipeline_stages(column_steps) -> tuple[set[str], list[str]]:
         stages.append(f"('{name}', FrameTransformer({inner}, columns={columns!r}))")
 
     stages.append("('coerce', NumericCoercer())")
-    return imports, stages
+    return imports, stages, needed_inline
 
 
 def _supervised_block(run: Any) -> str:

@@ -245,6 +245,15 @@ class ExperimentEngine:
             raise ValueError(f"Only {len(X)} usable rows remain after cleaning — too few to fit anything.")
 
         result.features = list(X.columns)
+        # Baselines ignore the features entirely, so unencoded columns are fine.
+        if pipeline is None and not spec.handles_categorical and spec.family != "baseline":
+            non_numeric = [c for c in X.columns if not pd.api.types.is_numeric_dtype(X[c])]
+            if non_numeric:
+                raise ValueError(
+                    f"{spec.name} needs numeric input, but {len(non_numeric)} column(s) are not: "
+                    f"{', '.join(non_numeric[:5])}. Supply a preprocessing pipeline that encodes "
+                    "them — recommend_pipeline() builds one suited to this model."
+                )
         X_train, X_test, y_train, y_test = self._split(X, y)
         result.n_train, result.n_test = len(X_train), len(X_test)
 

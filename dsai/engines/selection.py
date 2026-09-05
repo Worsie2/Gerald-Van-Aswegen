@@ -273,13 +273,23 @@ def _efficiency_component(result: ExperimentResult) -> float:
 
 
 def _find_baseline(results: list[ExperimentResult], registry: ModelRegistry) -> ExperimentResult | None:
+    """The do-nothing benchmark, not merely a simple model.
+
+    Several specs are flagged ``baseline`` because they are sensible reference
+    points (linear regression, the naive forecast). Only the ``baseline`` family
+    ignores the predictors entirely, and that is what "beats the baseline" means.
+    """
+    fallback: ExperimentResult | None = None
     for r in results:
         try:
-            if registry.get(r.model_key).baseline:
-                return r
+            spec = registry.get(r.model_key)
         except KeyError:
             continue
-    return None
+        if spec.family == "baseline":
+            return r
+        if spec.baseline and fallback is None:
+            fallback = r
+    return fallback
 
 
 def _simplest_acceptable(

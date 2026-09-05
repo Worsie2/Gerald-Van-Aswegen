@@ -134,11 +134,21 @@ def infer_seasonal_period(values: pd.Series) -> int | None:
 
 
 def detect_seasonality(values: pd.Series, period: int) -> dict[str, Any]:
-    """How strong is the repeating pattern, and which position peaks?"""
-    positions = np.arange(len(values)) % period
-    frame = pd.DataFrame({"value": values.to_numpy(), "position": positions})
+    """How strong is the repeating pattern, and which position peaks?
+
+    The series is detrended first. A trend of any size dominates the variance
+    and will hide a real seasonal pattern from a raw comparison of positions —
+    which is exactly the case where knowing about the seasonality matters most.
+    """
+    raw = values.to_numpy(dtype=float)
+    index = np.arange(len(raw))
+    slope, intercept = np.polyfit(index, raw, 1)
+    detrended = raw - (slope * index + intercept)
+
+    positions = index % period
+    frame = pd.DataFrame({"value": detrended, "position": positions})
     means = frame.groupby("position")["value"].mean()
-    overall_variance = float(values.var(ddof=1))
+    overall_variance = float(np.var(detrended, ddof=1))
     seasonal_variance = float(means.var(ddof=1)) if len(means) > 1 else 0.0
     strength = float(seasonal_variance / overall_variance) if overall_variance > 0 else 0.0
 
@@ -161,8 +171,10 @@ def detect_seasonality(values: pd.Series, period: int) -> dict[str, Any]:
         "trough_position": int(means.idxmin()),
         "seasonal_means": {int(k): float(v) for k, v in means.items()},
         "amplitude": float(means.max() - means.min()),
+        "detrended": True,
         "interpretation": (
-            f"A repeating pattern of length {period} explains about {strength:.1%} of the variation, "
+            f"After removing the trend, a repeating pattern of length {period} explains about "
+            f"{strength:.1%} of the remaining variation, "
             f"peaking at position {means.idxmax()} and bottoming at position {means.idxmin()} "
             f"(swing of {means.max() - means.min():,.4g})."
             if np.isfinite(p_value) and p_value < 0.05
