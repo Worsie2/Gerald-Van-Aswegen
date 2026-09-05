@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dsai"
+version = "0.1.0"
+description = "An AI data-science platform: profile a dataset, decide the analysis, run it, validate it, explain it, and recommend what to do."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Gerald van Aswegen" }]
+keywords = ["data-science", "automl", "analytics", "machine-learning", "statistics"]
+
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "scikit-learn>=1.3",
+    "scipy>=1.10",
+]
+
+[project.optional-dependencies]
+# Everything the platform can use; each is degraded gracefully if absent.
+stats = ["statsmodels>=0.14"]
+io = ["openpyxl>=3.1", "pyarrow>=14", "sqlalchemy>=2.0"]
+boosting = ["xgboost>=2.0", "lightgbm>=4.0", "catboost>=1.2"]
+mining = ["mlxtend>=0.23"]
+viz = ["plotly>=5.18", "matplotlib>=3.7"]
+app = ["streamlit>=1.30"]
+manifold = ["umap-learn>=0.5"]
+explain = ["shap>=0.44"]
+llm = ["anthropic>=0.40"]
+export = ["openpyxl>=3.1", "jinja2>=3.1"]
+full = [
+    "statsmodels>=0.14", "openpyxl>=3.1", "pyarrow>=14", "sqlalchemy>=2.0",
+    "xgboost>=2.0", "lightgbm>=4.0", "mlxtend>=0.23", "plotly>=5.18",
+    "matplotlib>=3.7", "streamlit>=1.30", "jinja2>=3.1",
+]
+dev = ["pytest>=7.4", "pytest-cov>=4.1"]
+
+[project.scripts]
+dsai = "dsai.cli:main"
+
+[project.entry-points."dsai.models"]
+# Third-party model packs register themselves here; see dsai.registry.base.load_plugins.
+
+[tool.setuptools.packages.find]
+include = ["dsai*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::FutureWarning", "ignore::UserWarning"]
