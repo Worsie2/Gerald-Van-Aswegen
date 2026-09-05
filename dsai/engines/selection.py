@@ -22,6 +22,10 @@ from dsai.engines import metrics as M
 from dsai.engines.experiment import ExperimentResult
 from dsai.registry.base import REGISTRY, Interpretability, ModelRegistry
 
+#: Local alias so the normaliser does not have to reach into the metrics module
+#: for every candidate.
+LOWER_IS_BETTER_LOCAL = M.LOWER_IS_BETTER
+
 # How the composite score is weighted. Exposed so the weighting is auditable
 # rather than buried in a formula.
 DEFAULT_WEIGHTS = {
@@ -109,8 +113,10 @@ def run_tournament(
     baseline_result = _find_baseline(usable, registry)
     baseline_score = baseline_result.primary(primary_metric) if baseline_result else None
 
+    field_scores = [r.primary(primary_metric) for r in usable]
+    field_scores = [s for s in field_scores if s is not None and np.isfinite(s)]
     ranked = [
-        _rank_one(r, primary_metric, baseline_score, weights, interpretability_need, registry)
+        _rank_one(r, primary_metric, baseline_score, weights, interpretability_need, registry, field_scores)
         for r in usable
     ]
     ranked.sort(key=lambda x: x.composite, reverse=True)
@@ -150,6 +156,7 @@ def _rank_one(
     weights: dict[str, float],
     interpretability_need: str,
     registry: ModelRegistry,
+    field_scores: list[float] | None = None,
 ) -> RankedModel:
     score = result.primary(primary_metric)
     ranked = RankedModel(
@@ -164,7 +171,7 @@ def _rank_one(
         concerns=list(result.warnings),
     )
 
-    performance = _normalise_performance(primary_metric, score, result.task_type)
+    performance = _normalise_performance(primary_metric, score, result.task_type, field_scores)
     generalisation = _generalisation_component(result)
     stability = _stability_component(result, primary_metric)
     interpretability = _interpretability_component(result, interpretability_need)
@@ -198,8 +205,18 @@ def _rank_one(
     return ranked
 
 
-def _normalise_performance(metric: str, score: float | None, task_type: TaskType) -> float:
-    """Map a raw metric onto 0-1, so different metrics can share one composite."""
+def _normalise_performance(
+    metric: str,
+    score: float | None,
+    task_type: TaskType,
+    field_scores: list[float] | None = None,
+) -> float:
+    """Map a raw metric onto 0-1, so different metrics can share one composite.
+
+    Bounded metrics (R², AUC, F1) map directly. Unbounded ones (RMSE, MAE) have
+    no absolute scale, so they are normalised against the rest of the field —
+    the best model in this tournament scores 1, the worst 0.
+    """
     if score is None or not np.isfinite(score):
         return 0.0
     if metric in {"r2", "explained_variance"}:
@@ -214,9 +231,15 @@ def _normalise_performance(metric: str, score: float | None, task_type: TaskType
         return float(np.clip(1.0 - score / 2.0, 0.0, 1.0))
     if metric in {"mape", "smape"}:
         return float(np.clip(1.0 - score / 100.0, 0.0, 1.0))
-    # RMSE/MAE have no natural ceiling, so they are normalised across the field
-    # by the caller; alone, they can only be compared relatively.
-    return float("nan")
+    # Unbounded error metrics: rank within this tournament's field.
+    if not field_scores or len(field_scores) < 2:
+        return 0.5
+    low, high = min(field_scores), max(field_scores)
+    if high - low < 1e-12:
+        return 0.5
+    normalised = (score - low) / (high - low)
+    # Lower is better for these, so invert.
+    return float(np.clip(1.0 - normalised if metric in LOWER_IS_BETTER_LOCAL else normalised, 0.0, 1.0))
 
 
 def _generalisation_component(result: ExperimentResult) -> float:
