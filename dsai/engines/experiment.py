@@ -382,6 +382,9 @@ class ExperimentEngine:
         result.test_scores = M.clustering_metrics(matrix, labels)
         result.extras["labels"] = np.asarray(labels).tolist()
         result.extras["row_index"] = list(X.index)
+        # Kept so the segment scatter can be drawn from the same space the
+        # clustering actually ran in, rather than an approximation of it.
+        result.extras["cluster_matrix"] = matrix[:5000].tolist()
         self._fitted[result.id] = (pre, estimator)
 
         n_clusters = result.test_scores.get("n_clusters", 0)

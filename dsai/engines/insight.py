@@ -193,7 +193,7 @@ def _model_findings(
         Finding(
             title=f"{best.model_name} predicts '{objective.target}' with {M.METRIC_LABELS.get(metric, metric)} of {M.format_metric(metric, score)}",
             detail=(
-                f"{M.explain_metric(metric)} This figure comes from {best.score_source} data, not from "
+                f"{M.explain_metric(metric)} This figure comes from {best.score_source(metric)} data, not from "
                 f"the rows the model was trained on. "
                 + _performance_verdict(objective.task_type, metric, score)
             ),

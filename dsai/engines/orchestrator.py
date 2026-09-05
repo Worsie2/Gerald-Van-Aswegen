@@ -441,6 +441,24 @@ class AIDataScientist:
 
         with run.trace.start("Running model diagnostics"):
             predictions = model.predict(sample)
+            # Kept so residual and predicted-vs-actual charts can be drawn later
+            # without refitting or re-splitting.
+            if run.objective.task_type is TaskType.REGRESSION:
+                run.best.extras["holdout_actual"] = [float(v) for v in np.asarray(sample_y, dtype=float)]
+            else:
+                run.best.extras["holdout_actual"] = [str(v) for v in np.asarray(sample_y)]
+            run.best.extras["holdout_predicted"] = [float(v) for v in np.asarray(predictions, dtype=float)] \
+                if run.objective.task_type is TaskType.REGRESSION else None
+            if run.objective.task_type.is_classification:
+                run.best.extras["holdout_predicted_labels"] = [str(v) for v in np.asarray(predictions)]
+                if hasattr(model, "predict_proba"):
+                    try:
+                        proba_values = np.asarray(model.predict_proba(sample))
+                        if proba_values.ndim == 2 and proba_values.shape[1] == 2:
+                            run.best.extras["holdout_score"] = [float(v) for v in proba_values[:, 1]]
+                            run.best.extras["holdout_positive_label"] = str(sorted(pd.unique(y))[-1])
+                    except Exception:
+                        pass
             if run.objective.task_type is TaskType.REGRESSION:
                 run.diagnostics = regression_diagnostics(sample_y, predictions, len(X.columns))
             else:
