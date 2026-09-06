@@ -39,7 +39,8 @@ class Workspace:
     scientist: AIDataScientist | None = None
     project_path: str | None = None
     mode: str = "guided"                 # guided | advanced
-    theme: str = "light"
+    #: Drives the interface chrome and the charts together, from the same tokens.
+    theme: str = "light"                 # light | dark
     chat: list[dict[str, Any]] = field(default_factory=list)
     notices: list[tuple[str, str]] = field(default_factory=list)
 

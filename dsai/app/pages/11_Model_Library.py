@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from dsai.app.components import dataframe, page_header
+from dsai.app.components import apply_theme, caveat, sidebar_chrome, dataframe, page_header
 from dsai.app.state import workspace
 from dsai.core.schema import TaskType
 from dsai.registry.base import REGISTRY, load_builtin_models, load_plugins
@@ -13,6 +13,8 @@ from dsai.preprocessing.steps import STEPS
 
 st.set_page_config(page_title="Model library · DSAI", page_icon="📚", layout="wide")
 state = workspace()
+apply_theme(state.theme)
+sidebar_chrome(state)
 load_builtin_models()
 
 page_header(

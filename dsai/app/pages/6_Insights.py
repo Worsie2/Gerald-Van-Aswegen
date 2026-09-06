@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from dsai.app.components import (
-    dataframe, finding_card, page_header, require_run, show_notices, workflow_nav,
+    apply_theme, caveat, sidebar_chrome, dataframe, finding_card, page_header, require_run, show_notices, workflow_nav,
 )
 from dsai.app.state import workspace
 from dsai.core.schema import EvidenceKind
@@ -15,6 +15,8 @@ from dsai.viz import plots
 
 st.set_page_config(page_title="Insights · DSAI", page_icon="🔎", layout="wide")
 state = workspace()
+apply_theme(state.theme)
+sidebar_chrome(state)
 show_notices(state)
 
 page_header(
@@ -23,7 +25,7 @@ page_header(
     "what a model inferred and what you assumed are kept apart on purpose.",
     "Step 6 of 7",
 )
-workflow_nav("Insights")
+workflow_nav("Insights", state)
 
 if not require_run(state):
     st.stop()
@@ -90,7 +92,7 @@ if run.series_analysis:
     for finding in analysis.get("findings", []):
         st.markdown(f"- {finding}")
     for issue in analysis.get("issues", []):
-        st.warning(issue, icon="⚠️")
+        caveat(issue)
     if run.best is not None:
         figure = plots.forecast_plot(run.best, mode=state.theme,
                                      target_name=run.objective.target or "value")
@@ -134,7 +136,7 @@ if run.self_check is None:
     st.info("No validation checks were run.")
 else:
     for check in run.self_check.checks:
-        icon = "✅" if check.passed else ("🔴" if check.severity == "blocking" else "⚠️")
+        icon = "✓" if check.passed else ("▲" if check.severity == "blocking" else "△")
         with st.expander(f"{icon}  {check.question}", expanded=not check.passed and check.severity == "blocking"):
             st.write(check.detail or "Passed.")
             if not check.passed and check.downgrade_steps:

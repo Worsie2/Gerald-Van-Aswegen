@@ -5,13 +5,15 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from dsai.app.components import dataframe, page_header, require_data, show_notices
+from dsai.app.components import apply_theme, caveat, inference, sidebar_chrome, decision_needed, dataframe, page_header, require_data, show_notices
 from dsai.app.state import scientist, workspace
 from dsai.engines.nl import answer_question, intent_to_objective, parse_command
 from dsai.engines.orchestrator import RunSettings
 
 st.set_page_config(page_title="Ask · DSAI", page_icon="💭", layout="wide")
 state = workspace()
+apply_theme(state.theme)
+sidebar_chrome(state)
 show_notices(state)
 
 page_header(
@@ -55,7 +57,7 @@ if intent is not None:
         st.markdown(intent.describe())
 
         if intent.clarification:
-            st.info(intent.clarification, icon="❓")
+            caveat(intent.clarification, label="Needs clarifying")
 
         if intent.action in {"describe", "correlate", "test", "rank"} and not intent.clarification:
             frame = state.typed_frame if state.typed_frame is not None else state.frame
@@ -79,9 +81,9 @@ if intent is not None:
                 ][:4]]
                 dataframe(ranked)
                 share = frame.nlargest(top_n, intent.target)[intent.target].sum() / frame[intent.target].sum()
-                st.info(
+                inference(
                     f"The top {top_n} rows account for {share:.1%} of total {intent.target}.",
-                    icon="📊",
+                    label="Concentration",
                 )
             st.session_state["_pending_intent"] = None
 
@@ -99,10 +101,10 @@ if intent is not None:
             st.session_state["_pending_intent"] = None
 
         elif intent.task_type is not None:
-            st.warning(
+            decision_needed(
                 f"This will train models and may take a while (estimated cost: {intent.estimated_cost}). "
                 "Nothing runs until you approve it.",
-                icon="⚠️",
+                label="Waiting on you",
             )
             columns = st.columns([1, 1, 4])
             if columns[0].button("Run it", type="primary"):

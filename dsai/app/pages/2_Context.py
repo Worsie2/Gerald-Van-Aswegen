@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from dsai.app.components import page_header, require_data, show_notices, workflow_nav
+from dsai.app.components import apply_theme, caveat, sidebar_chrome, page_header, require_data, show_notices, workflow_nav
 from dsai.app.state import workspace
 from dsai.core.profiler import apply_user_overrides
 from dsai.core.schema import BusinessContext
@@ -12,6 +12,8 @@ from dsai.engines.objective import describe_objectives, detect_objectives
 
 st.set_page_config(page_title="Context · DSAI", page_icon="💬", layout="wide")
 state = workspace()
+apply_theme(state.theme)
+sidebar_chrome(state)
 show_notices(state)
 
 page_header(
@@ -20,7 +22,7 @@ page_header(
     "and labelled as such — it is never mixed with what was measured.",
     "Step 2 of 7",
 )
-workflow_nav("Context")
+workflow_nav("Context", state)
 
 if not require_data(state):
     st.stop()

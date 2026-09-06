@@ -5,7 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from dsai.app.components import (
-    dataframe, metric_row, override_notice, page_header, quality_issues, show_notices, workflow_nav,
+    apply_theme, caveat, sidebar_chrome, dataframe, metric_row, override_notice, page_header, quality_issues, show_notices, workflow_nav,
 )
 from dsai.app.state import scientist, workspace
 from dsai.core.profiler import override_semantic_type
@@ -14,10 +14,12 @@ from dsai.dataio.loaders import LoadError, excel_sheet_names, list_sql_tables, l
 
 st.set_page_config(page_title="Data · DSAI", page_icon="📄", layout="wide")
 state = workspace()
+apply_theme(state.theme)
+sidebar_chrome(state)
 show_notices(state)
 
 page_header("Data", "Load a dataset. The platform inspects it before asking you anything.", "Step 1 of 7")
-workflow_nav("Data")
+workflow_nav("Data", state)
 
 file_tab, sql_tab, sample_tab = st.tabs(["Upload a file", "Database query", "Sample datasets"])
 
@@ -183,9 +185,10 @@ with targets_tab:
         st.info("No column stands out as an outcome variable. This may be a dataset for segmentation or exploration.")
 
     if profile.leakage_suspects:
-        st.warning(
-            "Some columns may leak the answer. A model built on these will look excellent in testing "
-            "and fail in production.", icon="⚠️",
+        caveat(
+            "A model built on these will look excellent in testing and fail in production. "
+            "Confirm each is genuinely knowable before the outcome occurs.",
+            label="Leakage risk",
         )
         for suspect in profile.leakage_suspects:
             st.markdown(f"- **`{suspect['column']}`** — {suspect['reason']}")

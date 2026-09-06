@@ -5,7 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from dsai.app.components import (
-    dataframe, decision_panel, override_notice, page_header, require_data, show_notices, workflow_nav,
+    apply_theme, caveat, sidebar_chrome, inference, dataframe, decision_panel, override_notice, page_header, require_data, show_notices, workflow_nav,
 )
 from dsai.app.state import workspace
 from dsai.core.schema import TaskType
@@ -16,6 +16,8 @@ from dsai.registry.base import REGISTRY
 
 st.set_page_config(page_title="Preprocessing · DSAI", page_icon="🧹", layout="wide")
 state = workspace()
+apply_theme(state.theme)
+sidebar_chrome(state)
 show_notices(state)
 
 page_header(
@@ -25,7 +27,7 @@ page_header(
     "on the full dataset.",
     "Step 3 of 7",
 )
-workflow_nav("Preprocessing")
+workflow_nav("Preprocessing", state)
 
 if not require_data(state):
     st.stop()
@@ -132,8 +134,8 @@ with edit_tab:
         st.caption(spec.description)
         if spec.when_to_use:
             st.markdown(f"**When to use it:** {spec.when_to_use}")
-        for caveat in spec.caveats:
-            st.warning(caveat, icon="⚠️")
+        for note in spec.caveats:
+            caveat(note)
 
         applicable = (
             [n for n, c in profile.columns.items() if not spec.applies_to or c.semantic_type in spec.applies_to]
@@ -193,7 +195,7 @@ with preview_tab:
 
         st.subheader("Leakage control")
         report = pipeline.leakage_report()
-        st.info(report["explanation"], icon="🔒")
+        inference(report["explanation"], label="Leakage control")
         columns = st.columns(2)
         columns[0].markdown("**Fitted inside each fold**")
         for name in report["fitted_inside_cross_validation"] or ["(none)"]:

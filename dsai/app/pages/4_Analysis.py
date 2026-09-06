@@ -5,7 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from dsai.app.components import (
-    decision_panel, metric_row, override_notice, page_header, require_data, show_notices,
+    apply_theme, caveat, sidebar_chrome, inference, decision_panel, metric_row, override_notice, page_header, require_data, show_notices,
     trace_view, workflow_nav,
 )
 from dsai.app.state import scientist, workspace
@@ -15,6 +15,8 @@ from dsai.engines.orchestrator import RunSettings
 
 st.set_page_config(page_title="Analysis · DSAI", page_icon="🧪", layout="wide")
 state = workspace()
+apply_theme(state.theme)
+sidebar_chrome(state)
 show_notices(state)
 
 page_header(
@@ -22,7 +24,7 @@ page_header(
     "Choose what to find out, review exactly what will run, then run it.",
     "Step 4 of 7",
 )
-workflow_nav("Analysis")
+workflow_nav("Analysis", state)
 
 if not require_data(state):
     st.stop()
@@ -100,7 +102,7 @@ if choice == "Define my own":
     )
 else:
     objective = objectives[labels.index(choice)]
-    st.info(objective.rationale, icon="💡")
+    inference(objective.rationale, label="Why this objective")
 
 state.objective = objective
 
@@ -173,7 +175,7 @@ metric_row([
 ])
 
 for warning in plan.warnings:
-    st.warning(warning, icon="⚠️")
+    caveat(warning)
 
 candidates_tab, reasoning_tab = st.tabs(["Candidate models", "Why these choices"])
 with candidates_tab:
@@ -213,7 +215,7 @@ if st.button(label, type="primary", use_container_width=True):
     lines: list[str] = []
 
     def on_event(event):
-        icons = {"done": "✓", "running": "⏳", "warning": "⚠️", "failed": "✗", "skipped": "–"}
+        icons = {"done": "✓", "running": "…", "warning": "!", "failed": "✗", "skipped": "–"}
         detail = f" — {event.detail}" if event.detail else ""
         lines.append(f"{icons.get(event.status, '·')} {event.step}{detail}")
         placeholder.code("\n".join(lines[-25:]), language=None)

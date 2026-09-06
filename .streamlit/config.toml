@@ -1,0 +1,21 @@
+# Streamlit theme, derived from dsai/viz/theme.py.
+# Do not edit these colours here — change them in the theme module, which is the
+# single source of truth shared with the charts, and regenerate.
+
+[theme]
+base                = "light"
+primaryColor        = "#2a78d6"
+backgroundColor     = "#fcfcfb"
+secondaryBackgroundColor = "#f5f4f1"
+textColor           = "#0b0b0b"
+font                = "sans serif"
+
+[server]
+headless            = true
+
+[browser]
+gatherUsageStats    = false
+
+[client]
+toolbarMode         = "minimal"
+showErrorDetails    = true

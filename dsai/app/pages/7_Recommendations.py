@@ -5,13 +5,15 @@ from __future__ import annotations
 import streamlit as st
 
 from dsai.app.components import (
-    page_header, recommendation_card, require_run, show_notices, workflow_nav,
+    apply_theme, caveat, sidebar_chrome, page_header, recommendation_card, require_run, show_notices, workflow_nav,
 )
 from dsai.app.state import workspace
 from dsai.engines.recommend import group_by_category
 
 st.set_page_config(page_title="Recommendations · DSAI", page_icon="✅", layout="wide")
 state = workspace()
+apply_theme(state.theme)
+sidebar_chrome(state)
 show_notices(state)
 
 page_header(
@@ -20,7 +22,7 @@ page_header(
     "formed without evidence.",
     "Step 7 of 7",
 )
-workflow_nav("Recommendations")
+workflow_nav("Recommendations", state)
 
 if not require_run(state):
     st.stop()
@@ -35,7 +37,6 @@ if run.self_check and run.self_check.blocking:
     st.error(
         "**These recommendations did not pass validation.** "
         + " ".join(run.self_check.blocking),
-        icon="🔴",
     )
 
 grouped = group_by_category(run.recommendations)
@@ -54,12 +55,12 @@ for tab, heading in zip(tabs, present):
 
 st.divider()
 st.subheader("Limitations that apply to all of this")
-st.info(
+caveat(
     "This is observational data. Every relationship found is an association — a third variable, "
     "reverse causation or selection into the sample would each produce the same pattern. Acting on "
     "a recommendation assumes the relationship survives intervention, which only a controlled test "
     "can establish. Test on a small group before rolling anything out.",
-    icon="ℹ️",
+    label="Applies to all of the above",
 )
 if run.context.assumptions:
     st.markdown("**Your assumptions, which every recommendation inherits:**")

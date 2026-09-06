@@ -7,12 +7,14 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from dsai.app.components import dataframe, page_header, show_notices
+from dsai.app.components import apply_theme, caveat, sidebar_chrome, dataframe, page_header, show_notices
 from dsai.app.state import workspace
 from dsai.repro.project import Project, list_projects
 
 st.set_page_config(page_title="Projects · DSAI", page_icon="🗂", layout="wide")
 state = workspace()
+apply_theme(state.theme)
+sidebar_chrome(state)
 show_notices(state)
 
 page_header(

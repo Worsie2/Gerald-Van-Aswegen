@@ -490,10 +490,13 @@ def model_comparison(tournament: Any, title: str = "Model comparison", mode: str
             hovertemplate="%{y}: %{x}<extra></extra>",
         )
     )
+    finite = [v for v in values if v is not None and np.isfinite(v)]
     figure.update_layout(
         xaxis_title=f"{M.METRIC_LABELS.get(metric, metric)}"
                     + (" (lower is better)" if metric in M.LOWER_IS_BETTER else " (higher is better)"),
-        margin={"l": 230, "r": 90, "t": 52, "b": 52}, bargap=BAR_GAP,
+        # Headroom on the axis so the outside value labels are not clipped.
+        xaxis={"range": [0, max(finite) * 1.16]} if finite and min(finite) >= 0 else {},
+        margin={"l": 230, "r": 40, "t": 52, "b": 52}, bargap=BAR_GAP,
     )
     return figure
 

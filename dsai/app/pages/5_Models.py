@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from dsai.app.components import (
-    dataframe, decision_panel, metric_row, page_header, require_run, show_notices, workflow_nav,
+    apply_theme, caveat, sidebar_chrome, inference, dataframe, decision_panel, metric_row, page_header, require_run, show_notices, workflow_nav,
 )
 from dsai.app.state import scientist, workspace
 from dsai.core.schema import TaskType
@@ -15,6 +15,8 @@ from dsai.viz import plots
 
 st.set_page_config(page_title="Models · DSAI", page_icon="🏁", layout="wide")
 state = workspace()
+apply_theme(state.theme)
+sidebar_chrome(state)
 show_notices(state)
 
 page_header(
@@ -22,7 +24,7 @@ page_header(
     "Every candidate, scored the same way. The highest raw score does not win automatically.",
     "Step 5 of 7",
 )
-workflow_nav("Models")
+workflow_nav("Models", state)
 
 if not require_run(state):
     st.stop()
@@ -65,7 +67,7 @@ for column, (label, model, help_text) in zip(columns, choices):
             st.caption(model.model_name)
 
 for warning in tournament.warnings:
-    st.warning(warning, icon="⚠️")
+    caveat(warning)
 
 # --------------------------------------------------------------------------
 # the table
@@ -125,7 +127,7 @@ with detail_tabs[0]:
         st.metric("Train-to-held-out gap", f"{best.overfitting_gap:.4f}",
                   help="Large gaps mean the training figure overstates real-world performance.")
     for warning in best.warnings:
-        st.warning(warning, icon="⚠️")
+        caveat(warning)
 
 with detail_tabs[1]:
     if run.explanation is None:
@@ -138,8 +140,8 @@ with detail_tabs[1]:
             st.plotly_chart(figure, use_container_width=True, key="explain_importance")
         for line in run.explanation.plain_english:
             st.markdown(f"- {line}")
-        for caveat in run.explanation.caveats:
-            st.warning(caveat, icon="⚠️")
+        for note in run.explanation.caveats:
+            caveat(note)
 
         if run.explanation.coefficients:
             with st.expander("Coefficients"):
@@ -160,7 +162,7 @@ with detail_tabs[1]:
             if curve.get("supported"):
                 st.line_chart(pd.DataFrame({chosen: curve["grid"], "predicted": curve["predictions"]})
                               .set_index(chosen))
-                st.info(curve["interpretation"], icon="📈")
+                inference(curve["interpretation"], label="Partial dependence")
             else:
                 st.info(curve.get("reason", "Not available for this variable."))
 
@@ -170,7 +172,7 @@ with detail_tabs[2]:
     else:
         st.markdown(run.diagnostics.get("interpretation", ""))
         for issue in run.diagnostics.get("issues", []):
-            st.warning(issue, icon="⚠️")
+            caveat(issue)
         if best.task_type is TaskType.REGRESSION:
             actual = best.extras.get("holdout_actual")
             predicted = best.extras.get("holdout_predicted")
@@ -198,7 +200,7 @@ with detail_tabs[2]:
             if run.diagnostics.get("calibration", {}).get("supported"):
                 calibration = run.diagnostics["calibration"]
                 st.markdown("**Probability calibration**")
-                st.info(calibration["interpretation"])
+                inference(calibration["interpretation"], label="Calibration")
                 dataframe(pd.DataFrame(calibration["bins"]))
 
 with detail_tabs[3]:

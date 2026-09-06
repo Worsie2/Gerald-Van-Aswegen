@@ -8,7 +8,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from dsai.app.components import decision_panel, page_header, require_run, show_notices
+from dsai.app.components import apply_theme, caveat, sidebar_chrome, decision_panel, page_header, require_run, show_notices
 from dsai.app.state import workspace
 from dsai.reporting.builder import build_report
 from dsai.reporting.exporters import to_excel, to_html, to_json, to_markdown, to_python
@@ -16,6 +16,8 @@ from dsai.repro.provenance import build_manifest
 
 st.set_page_config(page_title="Report · DSAI", page_icon="📑", layout="wide")
 state = workspace()
+apply_theme(state.theme)
+sidebar_chrome(state)
 show_notices(state)
 
 page_header(

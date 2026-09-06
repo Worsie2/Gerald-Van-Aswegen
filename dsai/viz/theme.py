@@ -121,3 +121,60 @@ def layout(title: str = "", mode: str = "light", height: int = 380, **overrides:
     }
     base.update(overrides)
     return base
+
+
+# --------------------------------------------------------------------------
+# Interface tokens
+# --------------------------------------------------------------------------
+# The chart palette above and the interface below deliberately share one
+# source of truth. Slot 1 of the categorical palette is the single accent;
+# everything else in the chrome is ink, surface or rule. An interface that
+# competes with its own charts for attention makes both harder to read.
+
+UI = {
+    "light": {
+        "accent": CATEGORICAL_LIGHT[0],
+        "accent_soft": "#eaf2fd",
+        "accent_ink": "#1c5cab",
+        "surface": SURFACES["light"]["surface"],
+        "surface_raised": "#ffffff",
+        "surface_sunken": "#f5f4f1",
+        "border": "#e6e5e1",
+        "border_strong": "#d3d1cb",
+        "text_primary": SURFACES["light"]["text_primary"],
+        "text_secondary": SURFACES["light"]["text_secondary"],
+        "text_muted": SURFACES["light"]["text_muted"],
+        "shadow": "0 1px 2px rgba(11,11,11,.04)",
+    },
+    "dark": {
+        "accent": CATEGORICAL_DARK[0],
+        "accent_soft": "#152234",
+        "accent_ink": "#86b6ef",
+        "surface": SURFACES["dark"]["surface"],
+        "surface_raised": "#212120",
+        "surface_sunken": "#141413",
+        "border": "#2f2f2c",
+        "border_strong": "#3f3f3b",
+        "text_primary": SURFACES["dark"]["text_primary"],
+        "text_secondary": SURFACES["dark"]["text_secondary"],
+        "text_muted": SURFACES["dark"]["text_muted"],
+        "shadow": "0 1px 2px rgba(0,0,0,.24)",
+    },
+}
+
+#: Type scale. Deliberately narrow — five sizes is enough to build a hierarchy,
+#: and more than that starts reading as decoration.
+TYPE_SCALE = {
+    "title": "1.75rem",
+    "section": "1.0625rem",
+    "body": "0.9375rem",
+    "caption": "0.8125rem",
+    "eyebrow": "0.6875rem",
+}
+
+MONO_FAMILY = 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace'
+
+
+def ui(mode: str = "light") -> dict[str, str]:
+    """Interface tokens for the given mode."""
+    return UI["dark" if mode == "dark" else "light"]
