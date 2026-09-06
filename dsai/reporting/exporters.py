@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html as _html
+import io as _io
 import json
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 import pandas as pd
 
 from dsai.reporting.builder import Report, build_report
+from dsai.reporting.figures import to_png
 
 _HTML_TEMPLATE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -45,26 +47,90 @@ _HTML_TEMPLATE = """<!doctype html>
   blockquote {{ margin:1rem 0; padding:.6rem 1rem; border-left:3px solid var(--accent);
                 color:var(--muted); }}
   em {{ color:var(--muted); }}
+  figure {{ margin:1.5rem 0 2rem; }}
+  figure h3 {{ margin:0 0 .5rem; }}
+  figcaption {{ color:var(--muted); font-size:.875rem; line-height:1.55; margin-top:.6rem; }}
+  figure img {{ max-width:100%; height:auto; display:block; }}
+  details.data {{ margin-top:.75rem; border-top:1px solid var(--line); padding-top:.5rem; }}
+  details.data summary {{ cursor:pointer; font-size:.85rem; color:var(--accent); }}
+  details.data[open] summary {{ margin-bottom:.5rem; }}
+  a:focus-visible, summary:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }}
+  @media print {{
+    details.data {{ display:block; }}
+    details.data > *:not(summary) {{ display:block !important; }}
+  }}
 </style></head>
 <body><div class="wrap">{body}</div></body></html>
 """
 
 
-def to_markdown(run: Any, audience: str = "both") -> str:
-    return build_report(run, audience).to_markdown()
+def to_markdown(
+    run: Any,
+    audience: str = "both",
+    frame: pd.DataFrame | None = None,
+    chart_files: dict[str, str] | None = None,
+) -> str:
+    report = build_report(run, audience, frame=frame, include_charts=True)
+    return report.to_markdown(chart_files=chart_files)
 
 
-def to_html(run: Any, audience: str = "both") -> str:
-    report = build_report(run, audience)
+def to_html(run: Any, audience: str = "both", frame: pd.DataFrame | None = None,
+            charts: bool = True) -> str:
+    """A single self-contained HTML file: text, tables and interactive charts.
+
+    The Plotly runtime is inlined into the first chart rather than fetched from a
+    CDN, so the report opens on a machine with no internet — which is often the
+    machine a report is read on. That costs about 3 MB once, not per chart.
+    """
+    report = build_report(run, audience, frame=frame, include_charts=charts)
     body = [f"<h1>{_html.escape(report.title)}</h1>",
             f'<p class="meta">Generated {_html.escape(report.generated_at)}</p>']
     if report.executive_summary:
         body.append("<h2>Executive summary</h2>")
         body.append(_markdown_to_html(report.executive_summary))
+
+    first_chart = True
     for heading, content in report.sections:
         body.append(f"<h2>{_html.escape(heading)}</h2>")
         body.append(_markdown_to_html(content))
+        for figure in report.figures_for(heading):
+            rendered, first_chart = _figure_html(figure, include_js=first_chart)
+            if rendered:
+                body.append(rendered)
     return _HTML_TEMPLATE.format(title=_html.escape(report.title), body="\n".join(body))
+
+
+def _figure_html(figure: Any, include_js: bool) -> tuple[str, bool]:
+    """One ``<figure>``: the chart, its caption, and the numbers behind it.
+
+    The table is always written, inside a collapsed ``<details>``. A chart that
+    fails to render leaves the caption and the table, which still say what the
+    chart was there to say.
+    """
+    from dsai.reporting.figures import to_html_div
+
+    div = to_html_div(figure.figure, include_js=include_js)
+    parts = [f"<figure><h3>{_html.escape(figure.title)}</h3>"]
+    if div:
+        parts.append(f'<div role="img" aria-label="{_html.escape(figure.alt)}">{div}</div>')
+        include_js = False
+    parts.append(f"<figcaption>{_html.escape(figure.caption)}</figcaption>")
+    if figure.has_table:
+        parts.append(
+            '<details class="data"><summary>The numbers behind this chart</summary>'
+            f'<div class="scroll">{_frame_to_html(figure.table)}</div></details>'
+        )
+    parts.append("</figure>")
+    return "".join(parts), include_js
+
+
+def _frame_to_html(frame: pd.DataFrame) -> str:
+    header = "".join(f"<th scope=\"col\">{_html.escape(str(c))}</th>" for c in frame.columns)
+    rows = []
+    for row in frame.head(40).itertuples(index=False):
+        cells = "".join(f"<td>{_html.escape('' if v is None else str(v))}</td>" for v in row)
+        rows.append(f"<tr>{cells}</tr>")
+    return f"<table><thead><tr>{header}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
 
 
 def _markdown_to_html(text: str) -> str:
@@ -155,7 +221,7 @@ def _inline(text: str) -> str:
     return escaped
 
 
-def to_excel(run: Any, path: str | Path) -> Path:
+def to_excel(run: Any, path: str | Path, frame: pd.DataFrame | None = None) -> Path:
     """Multi-sheet workbook: summary, tournament, findings, recommendations, profile."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -257,9 +323,64 @@ def to_excel(run: Any, path: str | Path) -> Path:
         )
 
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        for name, frame in sheets.items():
-            frame.to_excel(writer, sheet_name=name[:31], index=False)
+        for name, sheet in sheets.items():
+            sheet.to_excel(writer, sheet_name=name[:31], index=False)
+        _write_chart_sheet(writer, run, frame)
     return path
+
+
+def _write_chart_sheet(writer: Any, run: Any, frame: pd.DataFrame | None) -> None:
+    """A "Charts" sheet, each chart under its title and caption.
+
+    Static images need a headless browser. Where there is none the sheet is still
+    written with the titles, captions and the numbers behind each chart, so the
+    workbook says everything the pictures would have said.
+    """
+    try:
+        from dsai.reporting.figures import build_figures
+    except Exception:
+        return
+    try:
+        figures = build_figures(run, frame=frame)
+    except Exception:
+        return
+    if not figures:
+        return
+
+    worksheet = writer.book.create_sheet("Charts")
+    row = 1
+    for figure in figures:
+        worksheet.cell(row=row, column=1, value=figure.title).font = _bold_font()
+        worksheet.cell(row=row + 1, column=1, value=figure.caption)
+        row += 3
+        png = to_png(figure.figure, width=900, height=figure.height)
+        if png:
+            try:
+                from openpyxl.drawing.image import Image as XlImage
+
+                image = XlImage(_io.BytesIO(png))
+                image.width, image.height = 720, int(720 * figure.height / 900)
+                worksheet.add_image(image, f"A{row}")
+                row += int(image.height / 19) + 2
+            except Exception:
+                pass
+        if figure.has_table:
+            table = figure.table.head(30)
+            for offset, column in enumerate(table.columns, start=1):
+                worksheet.cell(row=row, column=offset, value=str(column)).font = _bold_font()
+            for r, record in enumerate(table.itertuples(index=False), start=row + 1):
+                for offset, value in enumerate(record, start=1):
+                    worksheet.cell(row=r, column=offset,
+                                   value=value if isinstance(value, (int, float, str)) else str(value))
+            row += len(table) + 2
+        row += 2
+    worksheet.column_dimensions["A"].width = 34
+
+
+def _bold_font():
+    from openpyxl.styles import Font
+
+    return Font(bold=True)
 
 
 def to_json(run: Any, path: str | Path | None = None) -> str:
@@ -284,7 +405,8 @@ def to_json(run: Any, path: str | Path | None = None) -> str:
     return text
 
 
-def to_pdf(run: Any, path: str | Path, audience: str = "both") -> Path | None:
+def to_pdf(run: Any, path: str | Path, audience: str = "both",
+           frame: pd.DataFrame | None = None) -> Path | None:
     """PDF via reportlab if installed; otherwise write HTML and say so.
 
     A browser's "print to PDF" on the HTML output gives a better result than a
@@ -299,17 +421,26 @@ def to_pdf(run: Any, path: str | Path, audience: str = "both") -> Path | None:
         from reportlab.lib.units import cm
         from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
     except ImportError:
-        fallback = path.with_suffix(".html")
+        # Not path.with_suffix(".html") — that collides with the HTML export
+        # sitting in the same directory and silently replaces it.
+        fallback = path.with_name(f"{path.stem}_print.html")
         fallback.write_text(to_html(run, audience), encoding="utf-8")
         raise RuntimeError(
             f"PDF export needs reportlab (pip install reportlab). "
             f"An HTML version was written to {fallback} instead — print that to PDF from your browser."
         )
 
-    report = build_report(run, audience)
+    from reportlab.lib.utils import ImageReader
+    from reportlab.platypus import Image as PdfImage
+
+    report = build_report(run, audience, frame=frame)
     styles = getSampleStyleSheet()
     body_style = ParagraphStyle("Body", parent=styles["BodyText"], fontSize=9.5, leading=13.5, spaceAfter=6)
     heading_style = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=13, spaceBefore=14, spaceAfter=6)
+    caption_style = ParagraphStyle("Caption", parent=body_style, fontSize=8.5, leading=11.5,
+                                   textColor="#5c6470", spaceBefore=3, spaceAfter=10)
+    figure_title_style = ParagraphStyle("FigTitle", parent=styles["Heading3"], fontSize=10.5,
+                                        spaceBefore=10, spaceAfter=4)
 
     document = SimpleDocTemplate(
         str(path), pagesize=A4,
@@ -322,11 +453,22 @@ def to_pdf(run: Any, path: str | Path, audience: str = "both") -> Path | None:
         flowables.append(Paragraph("Executive summary", heading_style))
         for paragraph in report.executive_summary.split("\n\n"):
             flowables.append(Paragraph(_pdf_inline(paragraph), body_style))
+    usable_width = document.width
     for heading, content in report.sections:
         flowables.append(Paragraph(_html.escape(heading), heading_style))
         for paragraph in content.split("\n\n"):
             if paragraph.strip():
                 flowables.append(Paragraph(_pdf_inline(paragraph), body_style))
+        for figure in report.figures_for(heading):
+            flowables.append(Paragraph(_html.escape(figure.title), figure_title_style))
+            png = to_png(figure.figure, width=900, height=figure.height)
+            if png:
+                # Scale to the text column so a wide chart is never cropped.
+                reader = ImageReader(_io.BytesIO(png))
+                width_px, height_px = reader.getSize()
+                flowables.append(PdfImage(_io.BytesIO(png), width=usable_width,
+                                          height=usable_width * height_px / width_px))
+            flowables.append(Paragraph(_pdf_inline(figure.caption), caption_style))
     document.build(flowables)
     return path
 
@@ -350,21 +492,61 @@ def to_python(run: Any, path: str | Path | None = None, data_path: str = "your_d
     return script
 
 
-def export_all(run: Any, directory: str | Path, data_path: str = "your_data.csv") -> dict[str, str]:
+def write_charts(run: Any, directory: str | Path,
+                 frame: pd.DataFrame | None = None) -> dict[str, str]:
+    """Write each chart as a PNG. Returns figure key -> path relative to *directory*.
+
+    An empty result means this machine has no headless browser for static image
+    export, not that the run had nothing to draw. Callers fall back to captions
+    and tables.
+    """
+    from dsai.reporting.figures import build_figures
+
+    directory = Path(directory)
+    charts = directory / "charts"
+    written: dict[str, str] = {}
+    try:
+        figures = build_figures(run, frame=frame)
+    except Exception:
+        return written
+    for figure in figures:
+        png = to_png(figure.figure, width=900, height=figure.height)
+        if not png:
+            continue
+        charts.mkdir(parents=True, exist_ok=True)
+        target = charts / f"{figure.key}.png"
+        target.write_bytes(png)
+        written[figure.key] = f"charts/{target.name}"
+    return written
+
+
+def export_all(run: Any, directory: str | Path, data_path: str = "your_data.csv",
+               frame: pd.DataFrame | None = None) -> dict[str, str]:
     """Write every available export format into one directory."""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     stem = f"{run.dataset_name}_{run.id}"
     written: dict[str, str] = {}
 
+    # Rendered once and referenced by the Markdown exports. The HTML report
+    # carries its charts inside itself and does not need these.
+    try:
+        chart_files = write_charts(run, directory, frame=frame)
+    except Exception:
+        chart_files = {}
+    if chart_files:
+        written["charts"] = str(directory / "charts")
+
     for label, filename, writer in [
-        ("markdown", f"{stem}.md", lambda p: p.write_text(to_markdown(run), encoding="utf-8")),
-        ("html", f"{stem}.html", lambda p: p.write_text(to_html(run), encoding="utf-8")),
+        ("markdown", f"{stem}.md",
+         lambda p: p.write_text(to_markdown(run, frame=frame, chart_files=chart_files), encoding="utf-8")),
+        ("html", f"{stem}.html", lambda p: p.write_text(to_html(run, frame=frame), encoding="utf-8")),
         ("business_summary", f"{stem}_business.md",
-         lambda p: p.write_text(to_markdown(run, "business"), encoding="utf-8")),
+         lambda p: p.write_text(to_markdown(run, "business", frame=frame, chart_files=chart_files),
+                                encoding="utf-8")),
         ("json", f"{stem}.json", lambda p: to_json(run, p)),
         ("python", f"{stem}_reproduce.py", lambda p: to_python(run, p, data_path)),
-        ("excel", f"{stem}.xlsx", lambda p: to_excel(run, p)),
+        ("excel", f"{stem}.xlsx", lambda p: to_excel(run, p, frame=frame)),
     ]:
         target = directory / filename
         try:
@@ -374,7 +556,7 @@ def export_all(run: Any, directory: str | Path, data_path: str = "your_data.csv"
             written[label] = f"failed: {exc}"
 
     try:
-        written["pdf"] = str(to_pdf(run, directory / f"{stem}.pdf"))
+        written["pdf"] = str(to_pdf(run, directory / f"{stem}.pdf", frame=frame))
     except Exception as exc:
         written["pdf"] = f"not written: {exc}"
     return written

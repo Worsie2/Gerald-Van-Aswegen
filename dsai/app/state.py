@@ -21,6 +21,33 @@ STATE_KEY = "dsai_workspace"
 
 
 @dataclass
+class Accessibility:
+    """How the interface should present itself, per user.
+
+    These are not preferences about taste. Each one answers a barrier someone
+    actually hits: text too small to read, contrast too low to distinguish,
+    motion that makes a page unusable, and charts that carry information no
+    screen reader can reach.
+    """
+
+    #: Multiplies the whole type scale. 1.0 | 1.15 | 1.3 | 1.5
+    text_scale: float = 1.0
+    #: Pushes ink and borders to maximum contrast against the surface.
+    high_contrast: bool = False
+    #: Suppresses every transition and animation in the app.
+    reduce_motion: bool = False
+    #: Shows the numbers behind every chart without needing to expand anything.
+    always_show_tables: bool = False
+    #: Underlines links so they are not distinguished by colour alone.
+    underline_links: bool = False
+
+    @property
+    def any_enabled(self) -> bool:
+        return (self.text_scale != 1.0 or self.high_contrast or self.reduce_motion
+                or self.always_show_tables or self.underline_links)
+
+
+@dataclass
 class Workspace:
     """Everything the UI is currently working on."""
 
@@ -44,7 +71,12 @@ class Workspace:
     project_path: str | None = None
     mode: str = "guided"                 # guided | advanced
     #: Drives the interface chrome and the charts together, from the same tokens.
-    theme: str = "light"                 # light | dark
+    #: Dark by default — it is what the base theme in config.toml is set to, so
+    #: the default costs no override, and it is the mode this workspace is
+    #: designed around.
+    theme: str = "dark"                  # light | dark
+    #: Presentation settings that remove barriers rather than express taste.
+    access: Accessibility = field(default_factory=Accessibility)
     chat: list[dict[str, Any]] = field(default_factory=list)
     notices: list[tuple[str, str]] = field(default_factory=list)
 

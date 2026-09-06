@@ -5,7 +5,8 @@ from __future__ import annotations
 import streamlit as st
 
 from dsai.app.components import (
-    apply_theme, caveat, sidebar_chrome, page_header, recommendation_card, require_run, show_notices, workflow_nav,
+    ai_panel, apply_theme, caveat, error_state, page_header, rank_item, recommendation_card,
+    require_run, show_notices, sidebar_chrome, workflow_nav,
 )
 from dsai.app.state import workspace
 from dsai.engines.recommend import group_by_category
@@ -33,10 +34,25 @@ if not run.recommendations:
     st.stop()
 
 if run.self_check and run.self_check.blocking:
-    st.error(
-        "**These recommendations did not pass validation.** "
-        + " ".join(run.self_check.blocking),
+    error_state(
+        "These recommendations did not pass validation",
+        " ".join(run.self_check.blocking),
+        "Treat everything below as provisional. The checks that failed are listed in full on the "
+        "**Models** page under *Decision log*, and the **Report** carries them into every export.",
     )
+
+_impact = {"high": ("high impact", "accent"), "medium": ("medium impact", "neutral"),
+           "low": ("low impact", "neutral")}
+
+ai_panel(
+    f"I have **{len(run.recommendations)} recommendation(s)**, each traced back to a specific "
+    "analytical output. Risks come first because acting on the rest before clearing them is how "
+    "an analysis does damage.",
+    heading="AI Analyst · recommended actions",
+    why="Nothing here is an opinion the platform formed without evidence. Every action below "
+        "names the finding it rests on; where the evidence is weak, the confidence says so rather "
+        "than the wording hiding it.",
+)
 
 grouped = group_by_category(run.recommendations)
 order = ["Risks to address first", "Data quality", "Actions to take", "What to investigate next"]
@@ -49,8 +65,28 @@ for tab, heading in zip(tabs, present):
             st.caption("Deal with these before acting on anything else.")
         elif heading == "What to investigate next":
             st.caption("Where the next analysis would add the most.")
-        for index, recommendation in enumerate(grouped[heading]):
-            recommendation_card(recommendation, index)
+        for index, recommendation in enumerate(grouped[heading], start=1):
+            marks = [(recommendation.confidence.value,
+                      "accent" if recommendation.confidence.value == "high" else "neutral")]
+            impact = str(getattr(recommendation, "expected_impact", "") or "").lower()
+            for level, mark in _impact.items():
+                if level in impact:
+                    marks.append(mark)
+                    break
+            rank_item(
+                index, recommendation.action,
+                body="**Why.** " + recommendation.reason
+                     + ("".join(f"  \n**Evidence.** {e}" for e in recommendation.evidence[:2]))
+                     + (f"  \n**Expected impact.** {recommendation.expected_impact}"
+                        if recommendation.expected_impact else "")
+                     + ("".join(f"  \n**Limit.** {c}" for c in recommendation.caveats[:2])
+                        if getattr(recommendation, "caveats", None) else ""),
+                badges=marks,
+                lead=index == 1 and heading == present[0],
+            )
+        with st.expander("The same recommendations as cards"):
+            for index, recommendation in enumerate(grouped[heading]):
+                recommendation_card(recommendation, index)
 
 st.divider()
 st.subheader("Limitations that apply to all of this")

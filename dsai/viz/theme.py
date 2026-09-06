@@ -133,34 +133,82 @@ def layout(title: str = "", mode: str = "light", height: int = 380, **overrides:
 
 UI = {
     "light": {
+        # Slot 1 of the categorical palette is the single accent, and the only
+        # hue in the chrome. An interface that competes with its own charts for
+        # attention makes both harder to read.
         "accent": CATEGORICAL_LIGHT[0],
         "accent_soft": "#eaf2fd",
         "accent_ink": "#1c5cab",
+        "accent_deep": "#184f95",
+        # The elevation ladder. Five steps, each a real surface with a job:
+        # the plane the app sits on, the rail, the sheet content sits on, the
+        # thing lifted off it, and the well things sit inside.
+        "plane": "#f9f9f7",
+        "rail": "#f2f1ee",
         "surface": SURFACES["light"]["surface"],
         "surface_raised": "#ffffff",
-        "surface_sunken": "#f5f4f1",
+        "surface_sunken": "#f1f0ed",
         "border": "#e6e5e1",
         "border_strong": "#d3d1cb",
+        "border_faint": "rgba(11,11,11,.06)",
         "text_primary": SURFACES["light"]["text_primary"],
         "text_secondary": SURFACES["light"]["text_secondary"],
         "text_muted": SURFACES["light"]["text_muted"],
-        "shadow": "0 1px 2px rgba(11,11,11,.04)",
+        # Fine shadows, not drop shadows. Depth is a hint here, not an effect.
+        "shadow": "0 1px 2px rgba(11,11,11,.045)",
+        "shadow_raised": "0 1px 3px rgba(11,11,11,.06), 0 6px 16px -6px rgba(11,11,11,.08)",
+        "shadow_overlay": "0 12px 32px -8px rgba(11,11,11,.16), 0 2px 6px rgba(11,11,11,.06)",
+        "hover": "rgba(11,11,11,.035)",
+        "selected": "#eaf2fd",
     },
     "dark": {
         "accent": CATEGORICAL_DARK[0],
-        "accent_soft": "#152234",
-        "accent_ink": "#86b6ef",
+        "accent_soft": "#14243a",
+        "accent_ink": "#9ec5f4",
+        "accent_deep": "#256abf",
+        "plane": "#0d0d0d",
+        "rail": "#151514",
         "surface": SURFACES["dark"]["surface"],
         "surface_raised": "#212120",
-        "surface_sunken": "#141413",
-        "border": "#2f2f2c",
-        "border_strong": "#3f3f3b",
+        "surface_sunken": "#151514",
+        "border": "#2c2c2a",
+        "border_strong": "#3d3d39",
+        "border_faint": "rgba(255,255,255,.07)",
         "text_primary": SURFACES["dark"]["text_primary"],
         "text_secondary": SURFACES["dark"]["text_secondary"],
         "text_muted": SURFACES["dark"]["text_muted"],
-        "shadow": "0 1px 2px rgba(0,0,0,.24)",
+        "shadow": "0 1px 2px rgba(0,0,0,.4)",
+        "shadow_raised": "0 1px 3px rgba(0,0,0,.5), 0 6px 16px -6px rgba(0,0,0,.55)",
+        "shadow_overlay": "0 12px 32px -8px rgba(0,0,0,.7), 0 2px 6px rgba(0,0,0,.4)",
+        "hover": "rgba(255,255,255,.045)",
+        "selected": "#14243a",
     },
 }
+
+#: Spacing. A four-step geometric scale — enough to build rhythm, few enough
+#: that two things separated by different amounts always means something.
+SPACE = {"xs": ".25rem", "sm": ".5rem", "md": ".875rem", "lg": "1.5rem", "xl": "2.5rem"}
+
+#: Corner radius. Small and consistent; the spec's warning about "excessive
+#: rounded rectangles" is a warning about radius used as decoration.
+RADIUS = {"sm": "4px", "md": "6px", "lg": "10px", "pill": "999px"}
+
+#: Motion. Everything in the 150-300ms band the spec calls for, on an ease-out
+#: curve so movement decelerates into place rather than stopping dead. Every
+#: rule that uses these is suppressed by the reduce-motion setting.
+MOTION = {
+    "fast": "140ms",
+    "base": "200ms",
+    "slow": "280ms",
+    "ease": "cubic-bezier(.22,.61,.36,1)",
+}
+
+#: There is no ninth hue available for an "AI" colour: every candidate violet
+#: measures under 4 ΔE from categorical slot 7, which means a reader cannot
+#: separate AI chrome from a data series. So AI identity is carried by a mark
+#: (✦), by the deep end of the accent's own ramp, and by motion — none of which
+#: can be mistaken for a series.
+AI_MARK = "✦"
 
 #: Type scale. Deliberately narrow — five sizes is enough to build a hierarchy,
 #: and more than that starts reading as decoration.

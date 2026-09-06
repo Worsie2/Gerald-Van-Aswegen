@@ -5,9 +5,54 @@ from __future__ import annotations
 import streamlit as st
 
 from dsai.app.components import (
-    apply_theme, caveat, sidebar_chrome, dataframe, metric_row, override_notice, page_header, quality_issues, show_notices, workflow_nav,
+    ai_panel, apply_theme, caveat, chart, column_card, dataframe, hero, metric_row,
+    override_notice, page_header, quality_bars, quality_issues, show_notices, sidebar_chrome,
+    workflow_nav,
 )
+from dsai.app.quality import quality_breakdown
 from dsai.app.state import scientist, workspace
+from dsai.viz import plots
+
+
+def column_notes(column, profile) -> list[str]:
+    """What the platform would do about this variable, and why.
+
+    Drawn from the same measurements the preprocessing recommender reads, so the
+    reading here and the pipeline it later builds cannot disagree.
+    """
+    notes: list[str] = []
+    if column.missing_pct > 40:
+        notes.append(
+            f"**{column.missing_pct:.0f}% of this column is missing.** Imputing that much invents "
+            "most of the variable; dropping the column is usually the more honest choice."
+        )
+    elif column.missing_pct > 0:
+        notes.append(
+            f"{column.missing_pct:.1f}% missing — enough to need imputation, little enough that "
+            "imputing it is defensible."
+        )
+    if column.skewness is not None and abs(column.skewness) > 1.5:
+        direction = "right" if column.skewness > 0 else "left"
+        notes.append(
+            f"Strongly {direction}-skewed (skew {column.skewness:.2f}). A log or Yeo-Johnson "
+            "transform helps linear models here; a tree does not care either way."
+        )
+    if column.outlier_pct and column.outlier_pct > 5:
+        notes.append(
+            f"{column.outlier_pct:.1f}% of values sit outside 1.5×IQR. Whether those are errors or "
+            "the interesting part of the data is a question about the business, not the numbers."
+        )
+    if column.n_unique == 1:
+        notes.append("Every row holds the same value, so this column carries no information at all.")
+    elif column.n_unique > 0 and profile.n_rows and column.n_unique / profile.n_rows > 0.9:
+        notes.append(
+            "Nearly every row has a distinct value — this looks like an identifier rather than a "
+            "measurement, and one-hot encoding it would create a column per row."
+        )
+    for suspect in getattr(profile, "leakage_suspects", []) or []:
+        if suspect.get("column") == column.name:
+            notes.append(f"**Possible leakage.** {suspect.get('reason', '')}")
+    return notes
 from dsai.core.profiler import override_semantic_type
 from dsai.core.schema import SemanticType
 from dsai.dataio.loaders import LoadError, excel_sheet_names, list_sql_tables, load_file, load_sql
@@ -116,8 +161,9 @@ st.markdown(
     f"**{len(profile.text_columns)} text** and **{len(profile.identifier_columns)} identifier** column(s)."
 )
 
-preview_tab, types_tab, quality_tab, targets_tab, stats_tab = st.tabs(
-    ["Preview", "Detected types", "Data quality", "Possible targets", "Statistics"]
+preview_tab, types_tab, inspect_tab, quality_tab, targets_tab, stats_tab = st.tabs(
+    ["Preview", "Detected types", "Inspect a variable", "Data quality", "Possible targets",
+     "Statistics"]
 )
 
 with preview_tab:
@@ -160,6 +206,33 @@ with types_tab:
             st.rerun()
 
 with quality_tab:
+    score_column, bars_column = st.columns([1, 3], gap="large")
+    with score_column:
+        hero(f"{profile.quality_score:.0f}", "/100", "Data quality score",
+             "A blunt heuristic. It flags problems; whether they matter is your call.")
+    with bars_column:
+        quality_bars(quality_breakdown(profile))
+
+    critical = profile.issues_by_severity("critical")
+    warnings = profile.issues_by_severity("warning")
+    if critical or warnings:
+        ai_panel(
+            f"I found **{len(critical)} critical** and **{len(warnings)} warning-level** problem(s) "
+            "in this dataset. Each one below says what it is and what fixing it would take. "
+            "The preprocessing recommender already accounts for these — you do not have to fix "
+            "them by hand first.",
+            heading="AI Analyst · data quality",
+            why="Nothing here is fixed automatically without you seeing it. A quality problem the "
+                "platform silently repairs is a problem you never learn your data has.",
+        )
+    else:
+        ai_panel(
+            "Nothing was flagged in this dataset. That means nothing was **detected** — it is not "
+            "a guarantee that the data is correct. Checks cover missingness, duplicates, constant "
+            "and near-constant columns, outliers, skew, collinearity and columns that look like "
+            "they give away the answer.",
+            heading="AI Analyst · data quality",
+        )
     quality_issues(profile)
 
 with targets_tab:
@@ -191,6 +264,40 @@ with targets_tab:
         )
         for suspect in profile.leakage_suspects:
             st.markdown(f"- **`{suspect['column']}`** — {suspect['reason']}")
+
+with inspect_tab:
+    st.caption(
+        "One variable at a time, with its distribution and what the platform makes of it. "
+        "The reading below each chart is what preprocessing would do about it, and why."
+    )
+    frame = state.typed_frame if state.typed_frame is not None else state.frame
+    chosen = st.selectbox("Variable", list(profile.columns), key="_inspect_column")
+    column = profile.columns[chosen]
+
+    facts_column, chart_column = st.columns([1, 2], gap="large")
+    with facts_column:
+        column_card(column, state.context.currency)
+    with chart_column:
+        figure = None
+        try:
+            if column.semantic_type in (SemanticType.CONTINUOUS, SemanticType.DISCRETE):
+                figure = plots.histogram(frame[chosen].dropna(), title=f"{chosen}: distribution",
+                                         mode=state.theme)
+            elif chosen in frame.columns:
+                counts = frame[chosen].astype("string").value_counts().head(12)
+                figure = plots.bar(list(counts.index), list(counts.values),
+                                   title=f"{chosen}: most common values", mode=state.theme,
+                                   orientation="h")
+        except Exception:
+            figure = None
+        if figure is not None:
+            chart(figure, key=f"inspect_{chosen}")
+        else:
+            st.caption("No distribution can be drawn for this kind of column.")
+
+    notes = column_notes(column, profile)
+    if notes:
+        ai_panel(" ".join(notes), heading=f"AI Analyst · {chosen}")
 
 with stats_tab:
     from dsai.statistics.descriptive import describe_categorical, describe_numeric, variance_inflation_factors

@@ -30,11 +30,14 @@ app = ["streamlit>=1.30"]
 manifold = ["umap-learn>=0.5"]
 explain = ["shap>=0.44"]
 llm = ["anthropic>=0.40"]
-export = ["openpyxl>=3.1", "jinja2>=3.1"]
+# PDF and PNG chart export. kaleido drives a headless browser for static images;
+# without it the HTML report still carries its charts, interactively.
+export = ["openpyxl>=3.1", "jinja2>=3.1", "reportlab>=4.0", "kaleido>=0.2.1"]
 full = [
     "statsmodels>=0.14", "openpyxl>=3.1", "pyarrow>=14", "sqlalchemy>=2.0",
     "xgboost>=2.0", "lightgbm>=4.0", "mlxtend>=0.23", "plotly>=5.18",
     "matplotlib>=3.7", "streamlit>=1.30", "jinja2>=3.1",
+    "reportlab>=4.0", "kaleido>=0.2.1",
 ]
 dev = ["pytest>=7.4", "pytest-cov>=4.1"]
 

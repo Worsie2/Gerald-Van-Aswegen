@@ -33,6 +33,10 @@ columns[3].metric("Preprocessing steps", len(STEPS))
 models_tab, steps_tab, plugins_tab = st.tabs(["Algorithms", "Preprocessing steps", "Extending it"])
 
 with models_tab:
+    query = st.text_input(
+        "Search", "", placeholder=f"Search {stats['total']} algorithms — name, family, or what it is good for…",
+        label_visibility="collapsed", key="_library_search",
+    )
     columns = st.columns(4)
     category = columns[0].selectbox("Category", ["all"] + REGISTRY.categories())
     family = columns[1].selectbox("Family", ["all"] + REGISTRY.families())
@@ -48,17 +52,58 @@ with models_tab:
         specs = [s for s in specs if any(t.value == task for t in s.task_types)]
     if only_available:
         specs = [s for s in specs if s.is_available()]
+    if query.strip():
+        needle = query.strip().lower()
+        specs = [
+            s for s in specs
+            if needle in s.name.lower() or needle in s.key.lower() or needle in s.family.lower()
+            or needle in s.category.lower()
+            or any(needle in item.lower() for item in (s.good_for or []))
+            or any(needle in item.lower() for item in (s.advantages or []))
+        ]
 
-    st.caption(f"{len(specs)} algorithm(s)")
-    dataframe(pd.DataFrame([
-        {
-            "Name": s.name, "Key": s.key, "Category": s.category, "Family": s.family,
-            "Interpretability": s.interpretability.value, "Cost": s.cost.value,
-            "Nonlinear": s.nonlinear, "Handles missing": s.handles_missing,
-            "Needs scaling": s.requires_scaling, "Available": s.is_available(),
-        }
-        for s in specs
-    ]))
+    st.caption(
+        f"{len(specs)} algorithm(s) match. Showing the first 24 as cards — narrow the search or "
+        "use the table below for the full list."
+    )
+
+    # Cards, not a wall of rows: the spec's point is that a library nobody can
+    # scan is not a library. Three across, capped, with the table underneath for
+    # anyone who wants everything at once.
+    _INTERPRETABILITY_BARS = {"transparent": 5, "high": 4, "moderate": 3, "low": 2, "opaque": 1}
+    grid = st.columns(3, gap="medium")
+    for position, spec in enumerate(specs[:24]):
+        with grid[position % 3], st.container(border=True):
+            tasks = " · ".join(t.value.replace("_", " ") for t in spec.task_types[:2])
+            filled = _INTERPRETABILITY_BARS.get(spec.interpretability.value, 3)
+            st.markdown(
+                f'<div class="dsai-card-title">{spec.name}</div>'
+                f'<div class="dsai-meta">{tasks}</div>'
+                f'<div style="font-size:.78rem;color:var(--ink-2);margin-bottom:.35rem">'
+                f'<span style="font-family:var(--mono);letter-spacing:.1em" aria-hidden="true">'
+                f'{"|" * filled}{"·" * (5 - filled)}</span>'
+                f'&nbsp;{spec.interpretability.value} interpretability · {spec.cost.value.replace("_", " ")} cost'
+                "</div>"
+                + (f'<div style="font-size:.8125rem;color:var(--ink-2);line-height:1.55">'
+                   f'<strong style="color:var(--ink-3);font-size:.68rem;text-transform:uppercase;'
+                   f'letter-spacing:.07em">Best for</strong><br>{spec.good_for[0]}</div>'
+                   if spec.good_for else "")
+                + ("" if spec.is_available() else
+                   '<div style="font-size:.75rem;color:var(--warning);margin-top:.4rem">'
+                   "needs an optional package</div>"),
+                unsafe_allow_html=True,
+            )
+
+    with st.expander(f"All {len(specs)} as a table"):
+        dataframe(pd.DataFrame([
+            {
+                "Name": s.name, "Key": s.key, "Category": s.category, "Family": s.family,
+                "Interpretability": s.interpretability.value, "Cost": s.cost.value,
+                "Nonlinear": s.nonlinear, "Handles missing": s.handles_missing,
+                "Needs scaling": s.requires_scaling, "Available": s.is_available(),
+            }
+            for s in specs
+        ]))
 
     st.divider()
     if specs:

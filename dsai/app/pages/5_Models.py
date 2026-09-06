@@ -6,8 +6,9 @@ import pandas as pd
 import streamlit as st
 
 from dsai.app.components import (
-    apply_theme, caveat, dataframe, decision_panel, inference, metric_row, page_header,
-    require_run, show_notices, sidebar_chrome, workflow_nav,
+    ai_panel, apply_theme, caveat, chart, dataframe, decision_panel, error_state, inference,
+    leaderboard, metric_row, page_header, rank_item, require_run, show_notices, sidebar_chrome,
+    workflow_nav,
 )
 from dsai.app.state import scientist, workspace
 from dsai.core.schema import TaskType
@@ -73,9 +74,33 @@ for warning in tournament.warnings:
 # the table
 # --------------------------------------------------------------------------
 st.divider()
-st.subheader("Full comparison")
+st.subheader("Leaderboard")
+ai_panel(
+    f"**{len(tournament.table)} model(s)** trained against the same held-out rows and the same "
+    f"validation split, ranked on **{tournament.primary_metric}**. "
+    + (f"**{run.best.model_name}** came out in front — best-performing *on this dataset under "
+       "this validation strategy*, which is not the same as best in general."
+       if run.best else "No model finished successfully."),
+    heading="AI Analyst · model comparison",
+    why="The ranking is composite, not a single score. A model that wins on the headline metric "
+        "but generalises badly is ranked below one that is marginally worse and stable — because "
+        "the first one will not hold up.",
+)
+
 table = pd.DataFrame(tournament.table)
-dataframe(table)
+_numeric = {c for c in table.columns if pd.api.types.is_numeric_dtype(table[c])}
+leaderboard(
+    [
+        {("#" if k == "rank" else k): (f"{v:,.4g}" if isinstance(v, float) else v)
+         for k, v in row.items()}
+        for row in tournament.table
+    ],
+    columns=[("#" if c == "rank" else c) for c in table.columns],
+    lead_index=0,
+    numeric={("#" if c == "rank" else c) for c in _numeric},
+)
+with st.expander("As a sortable grid"):
+    dataframe(table)
 st.caption(
     f"Composite weights — performance {tournament.weights['performance']:.0%}, "
     f"generalisation {tournament.weights['generalisation']:.0%}, "
@@ -86,7 +111,7 @@ st.caption(
 
 figure = plots.model_comparison(tournament, mode=theme)
 if figure is not None:
-    st.plotly_chart(figure, use_container_width=True, key="tournament_chart")
+    chart(figure, key="tournament_chart")
 
 # --------------------------------------------------------------------------
 # selected model detail
@@ -138,7 +163,7 @@ with detail_tabs[1]:
         st.caption(run.explanation.method_note)
         figure = plots.feature_importance(run.explanation, mode=theme)
         if figure is not None:
-            st.plotly_chart(figure, use_container_width=True, key="explain_importance")
+            chart(figure, key="explain_importance")
         for line in run.explanation.plain_english:
             st.markdown(f"- {line}")
         for note in run.explanation.caveats:
@@ -179,14 +204,14 @@ with detail_tabs[2]:
             predicted = best.extras.get("holdout_predicted")
             if actual and predicted:
                 columns = st.columns(2)
-                columns[0].plotly_chart(plots.predicted_vs_actual(actual, predicted, mode=theme),
-                                        use_container_width=True, key="diag_pva")
-                columns[1].plotly_chart(plots.residual_plot(actual, predicted, mode=theme),
-                                        use_container_width=True, key="diag_resid")
+                chart(plots.predicted_vs_actual(actual, predicted, mode=theme),
+                      key="diag_pva", container=columns[0])
+                chart(plots.residual_plot(actual, predicted, mode=theme),
+                      key="diag_resid", container=columns[1])
         elif best.task_type.is_classification:
             if run.diagnostics.get("confusion"):
-                st.plotly_chart(plots.confusion_matrix(run.diagnostics["confusion"], mode=theme),
-                                use_container_width=True, key="diag_confusion")
+                chart(plots.confusion_matrix(run.diagnostics["confusion"], mode=theme),
+                      key="diag_confusion")
             if run.diagnostics.get("per_class"):
                 dataframe(pd.DataFrame(run.diagnostics["per_class"]))
             scores = best.extras.get("holdout_score")
@@ -194,10 +219,10 @@ with detail_tabs[2]:
             if scores and positive is not None:
                 binary = [1 if str(a) == positive else 0 for a in best.extras["holdout_actual"]]
                 columns = st.columns(2)
-                columns[0].plotly_chart(plots.roc_curve(binary, scores, mode=theme),
-                                        use_container_width=True, key="diag_roc")
-                columns[1].plotly_chart(plots.precision_recall_curve(binary, scores, mode=theme),
-                                        use_container_width=True, key="diag_pr")
+                chart(plots.roc_curve(binary, scores, mode=theme),
+                      key="diag_roc", container=columns[0])
+                chart(plots.precision_recall_curve(binary, scores, mode=theme),
+                      key="diag_pr", container=columns[1])
             if run.diagnostics.get("calibration", {}).get("supported"):
                 calibration = run.diagnostics["calibration"]
                 st.markdown("**Probability calibration**")
@@ -302,5 +327,5 @@ with detail_tabs[7]:
     for index, spec in enumerate(specs):
         figure = plots.render(spec, frame, run, mode=theme)
         if figure is not None:
-            st.plotly_chart(figure, use_container_width=True, key=f"chart_{index}_{spec.kind}")
+            chart(figure, key=f"chart_{index}_{spec.kind}")
             st.caption(spec.reason)

@@ -5,7 +5,10 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from dsai.app.components import apply_theme, caveat, inference, sidebar_chrome, decision_needed, dataframe, page_header, require_data, show_notices
+from dsai.app.components import (
+    ai_panel, apply_theme, caveat, dataframe, decision_needed, inference, page_header,
+    require_data, show_notices, sidebar_chrome,
+)
 from dsai.app.state import scientist, workspace
 from dsai.engines.nl import answer_question, intent_to_objective, parse_command
 from dsai.engines.orchestrator import RunSettings
@@ -34,7 +37,24 @@ EXAMPLES = [
     "Try every suitable regression model.",
     "What should I investigate next?",
 ]
-st.caption("Examples: " + " · ".join(f"*{e}*" for e in EXAMPLES[:4]))
+ai_panel(
+    f"Ask me anything about **{state.dataset_name}**. I will show you what I understood and "
+    "exactly what I intend to run — the plan first, then the work, so nothing expensive or "
+    "wrong-headed happens without you seeing it coming.",
+    heading="Ask the AI Analyst",
+)
+
+# Real buttons, not a caption listing examples: an example you have to retype is
+# an example most people do not try.
+st.caption("Try one of these, or type your own below.")
+for row in (EXAMPLES[:4], EXAMPLES[4:8]):
+    for column, example in zip(st.columns(len(row)), row):
+        if column.button(example, key=f"eg_{example[:18]}", use_container_width=True):
+            state.chat.append({"role": "user", "content": example})
+            st.session_state["_pending_intent"] = parse_command(
+                example, state.profile, state.context, state.run
+            )
+            st.rerun()
 
 for message in state.chat:
     with st.chat_message(message["role"]):

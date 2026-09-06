@@ -5,13 +5,66 @@ from __future__ import annotations
 import streamlit as st
 
 from dsai.app.components import (
-    apply_theme, caveat, sidebar_chrome, inference, decision_panel, metric_row, override_notice, page_header, require_data, show_notices,
-    trace_view, workflow_nav,
+    ai_panel, apply_theme, caveat, chart, decision_panel, error_state, inference, leaderboard,
+    live_stages, metric_row, override_notice, page_header, rank_item, require_data, show_notices,
+    sidebar_chrome, skeleton, trace_view, workflow_nav,
 )
+from dsai.viz.theme import AI_MARK
 from dsai.app.state import scientist, workspace
 from dsai.core.schema import Objective, TaskType
 from dsai.engines.decision import Constraints, plan_analysis
+from dsai.registry.base import REGISTRY
 from dsai.engines.orchestrator import RunSettings
+
+
+
+def _failure_advice(exc: Exception, objective) -> str:
+    """Turn an exception into the next thing to try.
+
+    "Model failed" tells a reader nothing they can act on. These are the
+    failures this platform actually produces, each paired with the move that
+    resolves it.
+    """
+    message = str(exc).lower()
+    if "could not convert" in message or "invalid literal" in message or "dtype" in message:
+        return (
+            "A column holding text reached a model that only accepts numbers. Build a pipeline on "
+            "the **Preprocessing** page — the recommended one encodes categorical columns — or "
+            "check the Data page for a variable typed as text that should be numeric."
+        )
+    if "unencoded" in message or "categorical" in message:
+        return (
+            "Categorical columns need encoding before most models will accept them. The "
+            "**Preprocessing** page builds a pipeline that does this correctly, fitted inside each "
+            "cross-validation fold so nothing leaks."
+        )
+    if "nan" in message or "missing" in message or "infinity" in message:
+        return (
+            "Missing or infinite values reached a model that cannot take them. Add an imputation "
+            "step on the **Preprocessing** page, or drop the affected rows there."
+        )
+    if "n_splits" in message or "too few" in message or "n_samples" in message:
+        return (
+            "There are not enough rows for the validation strategy chosen. Lower the hold-out share "
+            "in Settings, or pick a simpler objective — a class with only a handful of rows cannot "
+            "be cross-validated."
+        )
+    if "memory" in message:
+        return (
+            "The run ran out of memory. Reduce **Models to compare**, set the time budget to "
+            "*fast*, or reduce the number of variables on the Preprocessing page."
+        )
+    if objective is not None and objective.task_type.is_supervised and not objective.target:
+        return (
+            f"{objective.task_type.value.replace('_', ' ').capitalize()} needs a target variable "
+            "and none is set. Choose one above."
+        )
+    return (
+        "Open **Why these choices** above to see the plan that was about to run, and the "
+        "**Data** page for anything flagged in the dataset. If the message names a column, that "
+        "column is where to look."
+    )
+
 
 state = workspace()
 apply_theme(state.theme)
@@ -51,6 +104,29 @@ state.mode = "advanced" if mode_key == "manual" else "guided"
 st.divider()
 
 # --------------------------------------------------------------------------
+# what the platform makes of this dataset, before anything is asked of the user
+# --------------------------------------------------------------------------
+_objectives = state.objectives or []
+if _objectives:
+    _lead = _objectives[0]
+    _issues = len(profile.quality_issues) if profile else 0
+    _available = len(REGISTRY.find(task_type=_lead.task_type, only_available=True))
+    ai_panel(
+        f"I have profiled **{profile.n_rows:,} rows** across **{profile.n_columns} variables** "
+        f"and found **{len(_objectives)} question{'s' if len(_objectives) != 1 else ''}** this data "
+        f"can actually answer. **{_available} algorithms** in the registry suit the strongest one.",
+        why=_lead.rationale,
+        evidence=(
+            [f"Data quality scores {profile.quality_score}/100"
+             + (f", with {_issues} issue(s) flagged" if _issues else ", with nothing flagged")]
+            + [f"Strongest candidate: {o.label().replace('_', ' ')}" for o in _objectives[:1]]
+            + ([f"{len(profile.leakage_suspects)} column(s) look like they leak the answer"]
+               if getattr(profile, "leakage_suspects", None) else [])
+        ),
+        confidence=_lead.confidence,
+    )
+
+# --------------------------------------------------------------------------
 # objective
 # --------------------------------------------------------------------------
 st.subheader("What do you want to find out?")
@@ -64,12 +140,27 @@ labels = [
     f"{o.label()}  ·  {'you asked for this' if o.source.startswith('user') else 'detected from the data'}"
     for o in objectives
 ]
-choice = st.radio("Suggested objectives", labels + ["Define my own"], index=0 if labels else 0)
+# Whatever was chosen on the Preprocessing page is pre-selected here, so the two
+# pages cannot silently disagree about what is being analysed.
+all_choices = labels + ["Define my own"]
+default_index = 0
+if state.objective is not None:
+    for position, candidate in enumerate(objectives):
+        if (candidate.task_type, candidate.target) == (state.objective.task_type, state.objective.target):
+            default_index = position
+            break
+    else:
+        default_index = len(all_choices) - 1
+
+choice = st.radio("Suggested objectives", all_choices, index=default_index)
 
 if choice == "Define my own":
     columns = st.columns(3)
-    task = columns[0].selectbox("Analysis type", list(TaskType),
-                                format_func=lambda t: t.value.replace("_", " "))
+    task = columns[0].selectbox(
+        "Analysis type", list(TaskType),
+        format_func=lambda t: t.value.replace("_", " "),
+        index=list(TaskType).index(state.objective.task_type) if state.objective is not None else 0,
+    )
     needs_target = task.is_supervised
     target = columns[1].selectbox(
         "Target variable", ["— none —"] + list(profile.columns),
@@ -155,6 +246,18 @@ interpretability = columns[2].selectbox(
 )
 test_size = columns[3].slider("Hold-out share", 0.1, 0.4, state.settings.test_size, 0.05)
 
+# A pipeline built by hand on the Preprocessing page used to be ignored unless the
+# mode happened to be Manual, which made the work look lost. It is now an explicit
+# choice, shown whenever a pipeline exists.
+use_my_pipeline = False
+if state.pipeline is not None:
+    use_my_pipeline = st.checkbox(
+        f"Use my '{state.active_pipeline}' pipeline instead of building one for each model",
+        value=True,
+        help="One pipeline is applied to every model in the comparison. Leaving this off lets the "
+             "platform tailor preprocessing to each model — a tree keeps its outliers, a KNN does not.",
+    )
+
 advanced = st.expander("Advanced settings", expanded=state.mode == "advanced")
 with advanced:
     columns = st.columns(3)
@@ -164,8 +267,6 @@ with advanced:
                                help="Slower. Uses a randomised search inside cross-validation.")
     aggressiveness = columns[2].selectbox("Preprocessing depth", ["minimal", "standard", "thorough"],
                                           index=1)
-    from dsai.registry.base import REGISTRY
-
     candidates = [s.key for s in REGISTRY.find(task_type=objective.task_type, only_available=True)]
     include = st.multiselect("Always include these models", candidates)
     exclude = st.multiselect("Never use these models", candidates)
@@ -211,26 +312,63 @@ metric_row([
 for warning in plan.warnings:
     caveat(warning)
 
-candidates_tab, reasoning_tab = st.tabs(["Candidate models", "Why these choices"])
+candidates_tab, table_tab, reasoning_tab = st.tabs(
+    ["Candidate models", "As a table", "Why these choices"]
+)
 with candidates_tab:
-    import pandas as pd
-
-    st.dataframe(
-        pd.DataFrame([
-            {
-                "Model": c.name, "Family": c.family, "Fit score": round(c.score, 3),
-                "Interpretability": c.interpretability, "Cost": c.cost,
-                "Chosen because": c.reasons[0] if c.reasons else "general-purpose fit",
-                "Concern": c.concerns[0] if c.concerns else "",
-            }
-            for c in plan.candidates
-        ]),
-        use_container_width=True, hide_index=True,
+    ai_panel(
+        f"Based on your objective and this dataset, I would evaluate these "
+        f"**{len(plan.candidates)} models**, ranked by how well each suits the data rather than by "
+        f"reputation. They are compared on **{plan.primary_metric}** against the same "
+        f"{plan.validation_strategy.get('strategy', 'validation').replace('_', ' ')} split.",
+        heading="AI model selection",
     )
+    for position, candidate in enumerate(plan.candidates, start=1):
+        marks = []
+        if position == 1:
+            marks.append(("recommended", "accent"))
+        elif position <= 3:
+            marks.append(("strong alternative", "neutral"))
+        if candidate.family == "baseline":
+            marks.append(("baseline", "neutral"))
+        if candidate.concerns:
+            marks.append(("has a caveat", "warning"))
+        rank_item(
+            position,
+            candidate.name,
+            body=(candidate.reasons[0] if candidate.reasons else "General-purpose fit for this shape of data.")
+                 + (f"  \n**Concern.** {candidate.concerns[0]}" if candidate.concerns else ""),
+            metrics=[
+                ("Fit score", f"{candidate.score:.2f}"),
+                ("Family", candidate.family.replace("_", " ")),
+                ("Interpretability", candidate.interpretability.replace("_", " ")),
+                ("Cost", candidate.cost.replace("_", " ")),
+            ],
+            badges=marks,
+            lead=position == 1,
+        )
     st.caption(
         "The shortlist deliberately spans model families. If a simple model matches a complex one, "
-        "that is itself a finding."
+        "that is itself a finding. Nothing here has been trained yet — these are candidates."
     )
+
+with table_tab:
+    leaderboard(
+        [
+            {
+                "#": position, "Model": c.name, "Family": c.family,
+                "Fit score": f"{c.score:.3f}", "Interpretability": c.interpretability,
+                "Cost": c.cost,
+                "Chosen because": c.reasons[0] if c.reasons else "general-purpose fit",
+                "Concern": c.concerns[0] if c.concerns else "—",
+            }
+            for position, c in enumerate(plan.candidates, start=1)
+        ],
+        columns=["#", "Model", "Family", "Fit score", "Interpretability", "Cost",
+                 "Chosen because", "Concern"],
+        numeric={"#", "Fit score"},
+    )
+
 with reasoning_tab:
     decision_panel(plan.decisions)
 
@@ -246,22 +384,34 @@ label = {
 
 if st.button(label, type="primary", use_container_width=True):
     placeholder = st.empty()
-    lines: list[str] = []
+    events: list = []
+
+    # Named stages rather than a spinner: a long operation should say what it is
+    # doing, both because it is more useful and because it is the truth.
+    placeholder.markdown(
+        f'<div class="dsai-ai" data-busy="yes">'
+        f'<div class="dsai-ai-head"><span class="dsai-ai-mark">{AI_MARK}</span>'
+        f"<span>AI Analyst at work</span></div>{skeleton(3)}</div>",
+        unsafe_allow_html=True,
+    )
 
     def on_event(event):
-        icons = {"done": "✓", "running": "…", "warning": "!", "failed": "✗", "skipped": "–"}
-        detail = f" — {event.detail}" if event.detail else ""
-        lines.append(f"{icons.get(event.status, '·')} {event.step}{detail}")
-        placeholder.code("\n".join(lines[-25:]), language=None)
+        events.append(event)
+        placeholder.markdown(
+            f'<div class="dsai-ai" data-busy="yes">'
+            f'<div class="dsai-ai-head"><span class="dsai-ai-mark">{AI_MARK}</span>'
+            f"<span>AI Analyst at work</span></div>{live_stages(events)}</div>",
+            unsafe_allow_html=True,
+        )
 
     engine = scientist()
     engine.trace_callback = on_event
     try:
-        with st.spinner("Analysing…"):
+        if True:
             run = engine.understand(state.frame, state.dataset_name, state.context, state.source)
             run.objective = objective
             engine.plan(run, objective, settings)
-            if state.pipeline is not None and state.mode == "advanced":
+            if use_my_pipeline and state.pipeline is not None:
                 run.pipeline = state.pipeline
             engine.execute(run)
             engine.interpret(run)
@@ -273,7 +423,11 @@ if st.button(label, type="primary", use_container_width=True):
         state.notify("success", f"Analysis complete in {run.duration_s}s. {run.summary()}")
         st.rerun()
     except Exception as exc:
-        st.error(f"The analysis failed: {type(exc).__name__}: {exc}")
+        error_state(
+            "The analysis could not finish",
+            f"It stopped at `{type(exc).__name__}` — {exc}",
+            _failure_advice(exc, objective),
+        )
     finally:
         engine.trace_callback = None
 

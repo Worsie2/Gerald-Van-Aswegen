@@ -7,12 +7,13 @@ import streamlit as st
 import pandas as pd
 
 from dsai.app.components import (
-    apply_theme, caveat, dataframe, decision_panel, empty_state, inference, metric_row,
-    override_notice, page_header, require_data, show_notices, sidebar_chrome, workflow_nav,
+    ai_panel, apply_theme, caveat, chart, dataframe, decision_panel, empty_state, inference,
+    metric_row, override_notice, page_header, pipeline_graph, require_data, show_notices,
+    sidebar_chrome, workflow_nav,
 )
 from dsai.viz import plots
 from dsai.app.state import workspace
-from dsai.core.schema import TaskType
+from dsai.core.schema import Objective, TaskType
 from dsai.preprocessing.pipeline import PreprocessingPipeline
 from dsai.preprocessing.recommender import recommend_pipeline
 from dsai.preprocessing.steps import STEPS
@@ -37,11 +38,77 @@ if not require_data(state):
 
 profile = state.profile
 frame = state.typed_frame if state.typed_frame is not None else state.frame
-objective = state.objective or (state.objectives[0] if state.objectives else None)
+# ---------------------------------------------------------------------------
+# What the pipeline is for
+#
+# Preprocessing depends on the question, so the question has to be answerable
+# here. Defaulting silently to the top-ranked objective made every pipeline a
+# regression pipeline and left no way to say otherwise without leaving the page.
+# ---------------------------------------------------------------------------
+detected = state.objectives or []
+options = [o.label() for o in detected] + ["Something else…"]
 
-if objective is None:
-    st.info("No analytical objective is set. Choose one on the **Analysis** page first.")
-    st.stop()
+current = state.objective
+index = 0
+if current is not None:
+    for position, candidate in enumerate(detected):
+        if (candidate.task_type, candidate.target) == (current.task_type, current.target):
+            index = position
+            break
+    else:
+        index = len(options) - 1
+
+purpose, note = st.columns([2, 3])
+selected = purpose.selectbox(
+    "What is this pipeline for?", options, index=index,
+    help="Preprocessing is not one recipe. A classifier, a clustering run and a forecast "
+         "each need different treatment, so the pipeline is built for the question you pick here.",
+)
+
+if selected == "Something else…":
+    manual = st.columns([2, 2, 1])
+    task = manual[0].selectbox(
+        "Analysis type", list(TaskType),
+        format_func=lambda t: t.value.replace("_", " "),
+        index=list(TaskType).index(current.task_type) if current is not None else 0,
+        key="_prep_task",
+    )
+    target_options = ["— none —"] + list(profile.columns)
+    target_index = 0
+    if current is not None and current.target in target_options:
+        target_index = target_options.index(current.target)
+    target = manual[1].selectbox(
+        "Target variable", target_options, index=target_index,
+        disabled=not task.is_supervised, key="_prep_target",
+        help="Held out of the pipeline so no step can learn from the answer.",
+    )
+    objective = Objective(
+        task_type=task,
+        target=None if target.startswith("—") or not task.is_supervised else target,
+        rationale="You chose this on the Preprocessing page.",
+        source="user_override",
+        priority=1.0,
+    )
+else:
+    objective = detected[options.index(selected)]
+
+if objective.task_type.is_supervised and not objective.target:
+    caveat(
+        f"{objective.task_type.value.replace('_', ' ').capitalize()} needs a target variable. "
+        "Pick one above, or the pipeline will be built as if nothing were being predicted — "
+        "which means no column is protected from leaking into the features."
+    )
+
+# Keep the rest of the workflow in step with what was chosen here.
+state.objective = objective
+note.write("")
+note.caption(
+    f"Building for **{objective.label().replace('_', ' ')}**"
+    + (f" — '{objective.target}' is held out of every step." if objective.target else "")
+    + "  This choice carries through to the Analysis page."
+)
+
+st.divider()
 
 # A pipeline switcher above the tabs: several can be held at once and compared.
 switch, new, delete = st.columns([3, 1, 1])
@@ -69,8 +136,9 @@ if delete.button("Delete", disabled=len(names) < 2, use_container_width=True):
     state.remove_pipeline(state.active_pipeline)
     st.rerun()
 
-build_tab, edit_tab, preview_tab, effect_tab, compare_tab, saved_tab = st.tabs(
-    ["Build", "Edit steps", "Preview effect", "What it changed", "Compare pipelines", "Saved pipelines"]
+build_tab, graph_tab, edit_tab, preview_tab, effect_tab, compare_tab, saved_tab = st.tabs(
+    ["Build", "The pipeline", "Edit steps", "Preview effect", "What it changed",
+     "Compare pipelines", "Saved pipelines"]
 )
 
 with build_tab:
@@ -111,6 +179,55 @@ with build_tab:
         decision_panel(decisions)
 
 pipeline = state.pipeline
+
+with graph_tab:
+    if pipeline is None:
+        empty_state(
+            "No pipeline yet",
+            "Build one on the **Build** tab and it is drawn here as the chain it is — "
+            "raw data at the top, the model at the bottom, every step between them named.",
+        )
+    else:
+        active = pipeline.active_steps
+        by_ai = sum(1 for s in active if s.added_by == "ai")
+        ai_panel(
+            f"This pipeline has **{len(active)} active step(s)**"
+            + (f", **{by_ai}** of which I added." if by_ai else ", all of them yours.")
+            + " Steps that learn anything from the data are fitted inside each cross-validation "
+            "fold, never on the full dataset, so no step can see the rows it will be scored on.",
+            heading="AI generated pipeline",
+            why="Row-scope operations run before the split because they change which rows exist. "
+                "Column-scope operations are compiled into an unfitted scikit-learn pipeline and "
+                "refitted per fold. That separation is what makes leakage structurally impossible "
+                "rather than merely avoided.",
+        )
+        nodes: list[dict] = [{
+            "name": "Raw data", "kind": "source",
+            "detail": f"{profile.n_rows:,} rows × {profile.n_columns} columns",
+        }]
+        for position, step in enumerate(active, start=1):
+            nodes.append({
+                "name": step.spec.name,
+                "kind": "step",
+                "scope": "before the split" if step.spec.scope == "row" else "per fold",
+                "detail": step.describe() + ("" if step.spec.leakage_safe
+                                             else " · fitted inside each fold so it cannot leak"),
+            })
+        nodes.append({
+            "name": f"Model ({objective.task_type.value.replace('_', ' ')})",
+            "kind": "model",
+            "detail": (f"predicting '{objective.target}'" if objective.target
+                       else "unsupervised — no target held out"),
+        })
+        pipeline_graph(nodes)
+        st.caption(
+            "Reordering and configuring steps is on the **Edit steps** tab. Dragging nodes needs a "
+            "custom front-end component Streamlit does not provide, so the graph is the picture "
+            "and the controls are beside it."
+        )
+        disabled = [s for s in pipeline.steps if not s.enabled]
+        if disabled:
+            caveat(f"{len(disabled)} step(s) are switched off and are not drawn above.")
 
 with edit_tab:
     if pipeline is None:
@@ -265,7 +382,7 @@ with effect_tab:
 
             figure = plots.correlation_comparison(rows, transformed, mode=state.theme)
             if figure is not None:
-                st.plotly_chart(figure, use_container_width=True, key="prep_corr")
+                chart(figure, key="prep_corr")
                 caveat(
                     "Correlation is computed on the columns as they stand at each point. After "
                     "one-hot encoding the 'after' matrix has more, narrower columns, so compare "
@@ -284,7 +401,7 @@ with effect_tab:
                     if not after_table.empty else {}
                 figure = plots.vif_comparison(before_vif, after_vif, mode=state.theme)
                 if figure is not None:
-                    st.plotly_chart(figure, use_container_width=True, key="prep_vif")
+                    chart(figure, key="prep_vif")
 
             st.markdown("**One variable, before and after**")
             shared = [c for c in before_numeric.columns if c in transformed.columns]
@@ -294,7 +411,7 @@ with effect_tab:
                     rows[column], transformed[column], mode=state.theme,
                 )
                 if figure is not None:
-                    st.plotly_chart(figure, use_container_width=True, key="prep_dist")
+                    chart(figure, key="prep_dist")
             else:
                 caveat(
                     "No column survives the pipeline under its original name — every one was "
@@ -304,7 +421,7 @@ with effect_tab:
             preview = pipeline.preview(features, target_series)
             figure = plots.pipeline_shape(preview["stages"], mode=state.theme)
             if figure is not None:
-                st.plotly_chart(figure, use_container_width=True, key="prep_shape")
+                chart(figure, key="prep_shape")
 
 with compare_tab:
     if len(state.pipeline_names) < 2:

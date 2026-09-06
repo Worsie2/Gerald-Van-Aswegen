@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import io
 import tempfile
+import zipfile
 from pathlib import Path
 
 import streamlit as st
 
-from dsai.app.components import apply_theme, caveat, sidebar_chrome, decision_panel, page_header, require_run, show_notices
+from dsai.app.components import (
+    apply_theme, caveat, chart, decision_panel, page_header, require_run, show_notices,
+    sidebar_chrome,
+)
 from dsai.app.state import workspace
 from dsai.reporting.builder import build_report
-from dsai.reporting.exporters import to_excel, to_html, to_json, to_markdown, to_python
+from dsai.reporting.exporters import (
+    to_excel, to_html, to_json, to_markdown, to_pdf, to_python, write_charts,
+)
 from dsai.repro.provenance import build_manifest
 
 state = workspace()
@@ -40,15 +46,47 @@ audience = st.radio(
 )
 audience_key = {"Both audiences": "both", "Management": "business", "Technical": "technical"}[audience]
 
-report = build_report(run, audience_key, state.context.currency)
+frame = state.typed_frame if state.typed_frame is not None else state.frame
+report = build_report(run, audience_key, state.context.currency,
+                      frame=frame, mode=state.theme)
 markdown = report.to_markdown()
 
-read_tab, decisions_tab, manifest_tab, export_tab = st.tabs(
-    ["Read", "Decision log", "Reproducibility", "Export"]
+read_tab, charts_tab, decisions_tab, manifest_tab, export_tab = st.tabs(
+    ["Read", "Charts", "Decision log", "Reproducibility", "Export"]
 )
 
 with read_tab:
-    st.markdown(markdown)
+    # The report reads in order, charts placed in the section they illustrate —
+    # the same document that comes out of the HTML export.
+    st.markdown(f"# {report.title}")
+    st.caption(f"Generated {report.generated_at}")
+    if report.executive_summary:
+        st.markdown("## Executive summary")
+        st.markdown(report.executive_summary)
+    for heading, body in report.sections:
+        st.markdown(f"## {heading}")
+        st.markdown(body)
+        for figure in report.figures_for(heading):
+            st.markdown(f"**{figure.title}**")
+            chart(figure.figure, caption=figure.caption, key=f"report_read_{figure.key}",
+                  table=figure.table)
+
+with charts_tab:
+    if not report.figures:
+        st.info(
+            "This run produced nothing to chart. Charts appear once there is a model comparison, "
+            "an explanation, segments or a forecast to draw."
+        )
+    else:
+        st.caption(
+            f"{len(report.figures)} chart(s), each travelling with the report into every export. "
+            "The caption states what the chart shows in words, so the point survives a reader who "
+            "cannot see it."
+        )
+        for figure in report.figures:
+            st.subheader(figure.title)
+            chart(figure.figure, caption=figure.caption, key=f"report_chart_{figure.key}",
+                  table=figure.table)
 
 with decisions_tab:
     st.caption(
@@ -77,8 +115,9 @@ with export_tab:
         use_container_width=True,
     )
     columns[1].download_button(
-        "HTML report", to_html(run, audience_key), file_name=f"{stem}.html", mime="text/html",
-        use_container_width=True,
+        "HTML report", to_html(run, audience_key, frame=frame), file_name=f"{stem}.html",
+        mime="text/html", use_container_width=True,
+        help="Self-contained: text, tables and the charts, interactive, with no internet needed.",
     )
     columns[2].download_button(
         "JSON (full results)", to_json(run), file_name=f"{stem}.json", mime="application/json",
@@ -95,7 +134,7 @@ with export_tab:
 
     with tempfile.TemporaryDirectory() as directory:
         try:
-            path = to_excel(run, Path(directory) / f"{stem}.xlsx")
+            path = to_excel(run, Path(directory) / f"{stem}.xlsx", frame=frame)
             columns[1].download_button(
                 "Excel workbook", path.read_bytes(), file_name=f"{stem}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -107,16 +146,44 @@ with export_tab:
                               help=str(exc))
 
     columns[2].download_button(
-        "Business summary", to_markdown(run, "business"),
+        "Business summary", to_markdown(run, "business", frame=frame),
         file_name=f"{stem}_business.md", mime="text/markdown", use_container_width=True,
     )
 
     st.divider()
-    st.caption(
-        "PDF: use the HTML export and print to PDF from your browser — it produces a better result "
-        "than a dedicated renderer here would. If `reportlab` is installed, `dsai.reporting."
-        "exporters.to_pdf()` writes one directly."
-    )
+    st.subheader("Charts and PDF")
+    if report.figures:
+        with tempfile.TemporaryDirectory() as directory:
+            files = write_charts(run, directory, frame=frame)
+            if files:
+                archive = io.BytesIO()
+                with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+                    for key, relative in files.items():
+                        bundle.write(Path(directory) / relative, arcname=relative)
+                st.download_button(
+                    f"Charts as PNG ({len(files)} files, .zip)", archive.getvalue(),
+                    file_name=f"{stem}_charts.zip", mime="application/zip",
+                    use_container_width=True,
+                )
+            else:
+                caveat(
+                    "PNG chart export needs a headless browser, which this machine does not have. "
+                    "Install one with `plotly_get_chrome`, or use the HTML report — its charts are "
+                    "interactive and need nothing extra."
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            try:
+                pdf = to_pdf(run, Path(directory) / f"{stem}.pdf", audience_key, frame=frame)
+                st.download_button(
+                    "PDF report", Path(pdf).read_bytes(), file_name=f"{stem}.pdf",
+                    mime="application/pdf", use_container_width=True,
+                )
+            except Exception as exc:
+                st.caption(
+                    f"PDF not written here ({exc}). The HTML export printed to PDF from your "
+                    "browser gives a better result anyway, and keeps the charts."
+                )
 
     st.subheader("Preview of the generated Python")
     st.code(to_python(run, data_path=data_hint)[:3000], language="python")

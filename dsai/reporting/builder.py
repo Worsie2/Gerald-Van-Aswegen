@@ -29,13 +29,33 @@ class Report:
     executive_summary: str = ""
     sections: list[tuple[str, str]] = field(default_factory=list)
     audience: str = "both"
+    #: Charts belonging to the sections above, each naming the section it follows.
+    figures: list[Any] = field(default_factory=list)
 
-    def to_markdown(self) -> str:
+    def figures_for(self, heading: str) -> list[Any]:
+        return [f for f in self.figures if f.after_section == heading]
+
+    def to_markdown(self, chart_dir: str | None = None, chart_files: dict[str, str] | None = None) -> str:
+        """Markdown, with images when the charts have been written to disk.
+
+        ``chart_files`` maps a figure key to a path relative to the markdown
+        file. Without it the caption and the table stand in for the picture, so
+        the point the chart makes still reaches a reader looking at plain text.
+        """
+        chart_files = chart_files or {}
         lines = [f"# {self.title}", "", f"*Generated {self.generated_at}*", ""]
         if self.executive_summary:
             lines += ["## Executive summary", "", self.executive_summary, ""]
         for heading, body in self.sections:
             lines += [f"## {heading}", "", body, ""]
+            for figure in self.figures_for(heading):
+                lines += [f"### {figure.title}", ""]
+                if figure.key in chart_files:
+                    lines += [f"![{figure.alt}]({chart_files[figure.key]})", ""]
+                lines += [figure.caption, ""]
+                if figure.has_table:
+                    lines += ["<!-- the numbers behind the chart -->",
+                              _markdown_table(figure.table, max_rows=20), ""]
         return "\n".join(lines)
 
     def to_text(self) -> str:
@@ -46,8 +66,20 @@ class Report:
         return text
 
 
-def build_report(run: Any, audience: str = "both", currency: str | None = None) -> Report:
-    """Assemble the full report from a completed :class:`AnalysisRun`."""
+def build_report(
+    run: Any,
+    audience: str = "both",
+    currency: str | None = None,
+    include_charts: bool = True,
+    frame: pd.DataFrame | None = None,
+    mode: str = "light",
+) -> Report:
+    """Assemble the full report from a completed :class:`AnalysisRun`.
+
+    ``frame`` is optional: given it, the report can draw the relationships in the
+    raw data as a heatmap; without it, the measured pairs on the profile carry
+    the same point.
+    """
     currency = currency or (run.context.currency if run.context else "ZAR")
     report = Report(
         title=f"Analysis report — {run.dataset_name}",
@@ -79,6 +111,21 @@ def build_report(run: Any, audience: str = "both", currency: str | None = None) 
         sections.append(("Reproducibility", _reproducibility_section(run)))
 
     report.sections = [(heading, body) for heading, body in sections if body.strip()]
+
+    if include_charts:
+        try:
+            from dsai.reporting.figures import build_figures
+
+            headings = {heading for heading, _ in report.sections}
+            report.figures = [
+                figure for figure in build_figures(run, mode=mode, frame=frame)
+                if figure.after_section in headings
+            ]
+        except Exception:
+            # Charts illustrate the report; they are not the report. A plotting
+            # library that is missing or unhappy must not cost the reader the text.
+            report.figures = []
+
     return report
 
 

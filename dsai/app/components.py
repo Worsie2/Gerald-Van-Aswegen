@@ -35,7 +35,9 @@ from typing import Any
 import pandas as pd
 
 from dsai.core.schema import Confidence, Decision, EvidenceKind, Finding, Recommendation
-from dsai.viz.theme import MONO_FAMILY, TYPE_SCALE, ui
+from dsai.viz.theme import (
+    AI_MARK, MONO_FAMILY, MOTION, RADIUS, SPACE, STATUS, TYPE_SCALE, ui,
+)
 
 # Confidence is never conveyed by colour alone: each level carries a distinct
 # glyph and its own word.
@@ -69,27 +71,61 @@ WORKFLOW_STAGES = [
 # the stylesheet
 # --------------------------------------------------------------------------
 
+# Streamlit's own widget internals are painted from the static base in
+# config.toml, which is light. Dark mode is therefore the override: these rules
+# reach the widgets the stylesheet's tokens cannot. The light block below exists
+# for the few places our own plane differs from Streamlit's default.
+_LIGHT_RULES = """
+[data-testid="stSidebar"], [data-testid="stHeader"] { color-scheme:light; }
+[data-testid="stAppViewContainer"], .stApp { color-scheme:light; }
+[data-testid="stHeader"] { background:var(--plane) !important; }
+[data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea,
+[data-testid="stNumberInput"] input {
+  background:var(--surface) !important; color:var(--ink) !important;
+  border-color:var(--border) !important;
+}
+[data-baseweb="select"] > div, [data-baseweb="popover"] li,
+[data-baseweb="popover"] ul {
+  background:var(--surface) !important; color:var(--ink) !important;
+  border-color:var(--border) !important;
+}
+[data-baseweb="popover"] li:hover { background:var(--hover) !important; }
+[data-testid="stDataFrame"], [data-testid="stDataFrame"] canvas { background:var(--surface); }
+[data-testid="stExpander"] { background:var(--surface); }
+[data-testid="stExpander"] summary p, [data-testid="stExpander"] p,
+[data-testid="stExpander"] li { color:var(--ink) !important; }
+[data-testid="stVerticalBlockBorderWrapper"] { background:var(--surface) !important; }
+[data-testid="stJson"] { background:var(--sunken); }
+.stButton button, .stDownloadButton button {
+  background:var(--surface); color:var(--ink); border-color:var(--border-strong);
+}
+.stSlider [data-baseweb="slider"] div[role="slider"] { border-color:var(--border-strong); }
+"""
+
+# Reconstructing dark from a light base: every widget internal Streamlit paints
+# for itself has to be reached by hand.
 _DARK_RULES = """
 [data-testid="stSidebar"], [data-testid="stHeader"] { color-scheme:dark; }
 [data-testid="stAppViewContainer"], .stApp { color-scheme:dark; }
+[data-testid="stHeader"] { background:var(--plane) !important; }
 [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea,
 [data-testid="stNumberInput"] input {
   background:var(--sunken) !important; color:var(--ink) !important;
   border-color:var(--border) !important;
 }
-[data-baseweb="select"] > div, [data-baseweb="popover"] li {
-  background:var(--sunken) !important; color:var(--ink) !important;
+[data-baseweb="select"] > div, [data-baseweb="popover"] li,
+[data-baseweb="popover"] ul {
+  background:var(--raised) !important; color:var(--ink) !important;
   border-color:var(--border) !important;
 }
+[data-baseweb="popover"] li:hover { background:var(--hover) !important; }
 [data-testid="stDataFrame"], [data-testid="stDataFrame"] canvas { background:var(--surface); }
-[data-testid="stExpander"] { background:var(--sunken); }
-[data-testid="stExpander"] summary p, [data-testid="stExpander"] p,
-[data-testid="stExpander"] li { color:var(--ink) !important; }
-[data-testid="stVerticalBlockBorderWrapper"] { background:var(--raised) !important; }
-[data-testid="stAlert"] { filter:saturate(.75) brightness(.92); }
+[data-testid="stExpander"] { background:var(--surface); }
+[data-testid="stVerticalBlockBorderWrapper"] { background:var(--surface) !important; }
+[data-testid="stAlert"] { filter:saturate(.8) brightness(.95); }
 [data-testid="stJson"] { background:var(--sunken); }
 .stButton button, .stDownloadButton button {
-  background:var(--sunken); color:var(--ink); border-color:var(--border-strong);
+  background:var(--surface); color:var(--ink); border-color:var(--border-strong);
 }
 [data-testid="stTabs"] [data-baseweb="tab-highlight"] { background:var(--accent); }
 """
@@ -97,23 +133,38 @@ _DARK_RULES = """
 
 def _stylesheet(mode: str) -> str:
     t = ui(mode)
-    dark_rules = _DARK_RULES if mode == "dark" else ""
+    mode_rules = _LIGHT_RULES if mode == "light" else _DARK_RULES
     return f"""
 <style>
 :root {{
   --accent:{t['accent']}; --accent-soft:{t['accent_soft']}; --accent-ink:{t['accent_ink']};
+  --accent-deep:{t['accent_deep']};
+  --plane:{t['plane']}; --rail:{t['rail']};
   --surface:{t['surface']}; --raised:{t['surface_raised']}; --sunken:{t['surface_sunken']};
-  --border:{t['border']}; --border-strong:{t['border_strong']};
+  --border:{t['border']}; --border-strong:{t['border_strong']}; --border-faint:{t['border_faint']};
   --ink:{t['text_primary']}; --ink-2:{t['text_secondary']}; --ink-3:{t['text_muted']};
-  --shadow:{t['shadow']};
+  --shadow:{t['shadow']}; --shadow-raised:{t['shadow_raised']};
+  --shadow-overlay:{t['shadow_overlay']};
+  --hover:{t['hover']}; --selected:{t['selected']};
+  --good:{STATUS['good']}; --warning:{STATUS['warning']};
+  --serious:{STATUS['serious']}; --critical:{STATUS['critical']};
   --mono:{MONO_FAMILY};
   --t-title:{TYPE_SCALE['title']}; --t-section:{TYPE_SCALE['section']};
   --t-body:{TYPE_SCALE['body']}; --t-caption:{TYPE_SCALE['caption']};
   --t-eyebrow:{TYPE_SCALE['eyebrow']};
+  --s-xs:{SPACE['xs']}; --s-sm:{SPACE['sm']}; --s-md:{SPACE['md']};
+  --s-lg:{SPACE['lg']}; --s-xl:{SPACE['xl']};
+  --r-sm:{RADIUS['sm']}; --r-md:{RADIUS['md']}; --r-lg:{RADIUS['lg']}; --r-pill:{RADIUS['pill']};
+  --m-fast:{MOTION['fast']}; --m-base:{MOTION['base']}; --m-slow:{MOTION['slow']};
+  --ease:{MOTION['ease']};
 }}
 
-/* ---- ground ---- */
-.stApp, [data-testid="stAppViewContainer"] {{ background:var(--surface); }}
+/* ---- ground ----
+   Five surfaces, each one step of elevation: the plane the app sits on, the
+   rail beside it, the sheet content sits on, the thing lifted off that sheet,
+   and the well things sit inside. Contrast between them is deliberately small —
+   the hierarchy is legible without any of it shouting. */
+.stApp, [data-testid="stAppViewContainer"] {{ background:var(--plane); }}
 [data-testid="stAppViewContainer"] .main .block-container {{
   padding-top:2.75rem; padding-bottom:6rem; max-width:74rem;
 }}
@@ -146,8 +197,9 @@ hr {{ border-color:var(--border); margin:2rem 0; }}
 
 /* ---- sidebar: a table of contents, not a control panel ---- */
 [data-testid="stSidebar"] {{
-  background:var(--sunken); border-right:1px solid var(--border);
+  background:var(--rail); border-right:1px solid var(--border);
 }}
+[data-testid="stSidebar"] > div {{ padding-top:.6rem; }}
 [data-testid="stSidebar"] [data-testid="stSidebarNav"] {{ padding-top:.4rem; }}
 [data-testid="stSidebarNav"] a {{
   border-radius:5px; margin:1px 6px; padding:.3rem .55rem !important;
@@ -162,14 +214,15 @@ hr {{ border-color:var(--border); margin:2rem 0; }}
 }}
 /* our own navigation, rendered with st.page_link */
 [data-testid="stSidebar"] [data-testid="stPageLink"] a {{
-  border-radius:5px; padding:.26rem .5rem; margin:0; min-height:0;
+  border-radius:var(--r-sm); padding:.28rem .55rem; margin:0; min-height:0;
+  transition:background var(--m-fast) var(--ease), color var(--m-fast) var(--ease);
 }}
 [data-testid="stSidebar"] [data-testid="stPageLink"] a p {{
   font-size:var(--t-caption) !important; color:var(--ink-2); margin:0;
 }}
-[data-testid="stSidebar"] [data-testid="stPageLink"] a:hover {{ background:var(--border); }}
+[data-testid="stSidebar"] [data-testid="stPageLink"] a:hover {{ background:var(--hover); }}
 [data-testid="stSidebar"] [data-testid="stPageLink"] a[aria-current="page"] {{
-  background:var(--accent-soft);
+  background:var(--selected); box-shadow:inset 2px 0 0 var(--accent);
 }}
 [data-testid="stSidebar"] [data-testid="stPageLink"] a[aria-current="page"] p {{
   color:var(--accent-ink); font-weight:600;
@@ -292,9 +345,11 @@ hr {{ border-color:var(--border); margin:2rem 0; }}
 
 /* ---- cards ---- */
 [data-testid="stVerticalBlockBorderWrapper"] {{
-  border-color:var(--border) !important; border-radius:7px !important;
-  background:var(--raised); box-shadow:var(--shadow);
+  border-color:var(--border) !important; border-radius:var(--r-md) !important;
+  background:var(--surface); box-shadow:var(--shadow);
+  transition:border-color var(--m-base) var(--ease), box-shadow var(--m-base) var(--ease);
 }}
+[data-testid="stVerticalBlockBorderWrapper"]:hover {{ box-shadow:var(--shadow-raised); }}
 .dsai-card-title {{
   font-size:1rem; font-weight:600; color:var(--ink); line-height:1.4;
   letter-spacing:-.008em; margin-bottom:.2rem;
@@ -307,8 +362,9 @@ hr {{ border-color:var(--border); margin:2rem 0; }}
 
 /* ---- expanders: quiet until opened ---- */
 [data-testid="stExpander"] {{
-  border:1px solid var(--border); border-radius:6px; background:var(--surface);
+  border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface);
   margin-bottom:.45rem;
+  transition:border-color var(--m-fast) var(--ease), background var(--m-fast) var(--ease);
 }}
 [data-testid="stExpander"] summary {{ font-size:.9rem; padding:.15rem 0; }}
 [data-testid="stExpander"] summary p {{ font-size:.9rem !important; color:var(--ink); }}
@@ -320,7 +376,9 @@ hr {{ border-color:var(--border); margin:2rem 0; }}
 }}
 [data-testid="stTabs"] [data-baseweb="tab"] {{
   padding:.35rem 0; font-size:var(--t-caption); letter-spacing:.012em; color:var(--ink-3);
+  transition:color var(--m-fast) var(--ease);
 }}
+[data-testid="stTabs"] [data-baseweb="tab"]:hover {{ color:var(--ink-2); }}
 [data-testid="stTabs"] [aria-selected="true"] {{ color:var(--ink) !important; font-weight:600; }}
 
 /* ---- alerts: reserved for what is genuinely wrong, and flatter than default ---- */
@@ -348,17 +406,54 @@ hr {{ border-color:var(--border); margin:2rem 0; }}
 
 /* ---- buttons ---- */
 .stButton button, .stDownloadButton button {{
-  border-radius:6px; border:1px solid var(--border-strong); font-size:var(--t-caption);
-  font-weight:500; padding:.36rem .85rem; transition:none;
+  border-radius:var(--r-md); border:1px solid var(--border-strong); font-size:var(--t-caption);
+  font-weight:500; padding:.36rem .85rem; background:var(--surface);
+  transition:border-color var(--m-fast) var(--ease), background var(--m-fast) var(--ease),
+             color var(--m-fast) var(--ease), transform var(--m-fast) var(--ease);
 }}
 .stButton button:hover, .stDownloadButton button:hover {{
-  border-color:var(--accent); color:var(--accent-ink);
+  border-color:var(--accent); color:var(--accent-ink); background:var(--hover);
 }}
+.stButton button:active, .stDownloadButton button:active {{ transform:translateY(.5px); }}
 .stButton button[kind="primary"] {{
   background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600;
 }}
 .stButton button[kind="primary"]:hover {{
   background:var(--accent-ink); border-color:var(--accent-ink); color:#fff;
+}}
+
+/* ---- widget surfaces ----
+   Streamlit paints select, input and textarea backgrounds from
+   secondaryBackgroundColor in config.toml — one static value that cannot follow
+   a runtime theme change. Repainting them from our own tokens here means one
+   rule serves both modes, because the token already differs per mode.
+
+   Targeted by test id rather than by data-baseweb: the element Streamlit
+   actually paints does not carry that attribute in every version, and a
+   selector that silently stops matching is how a whole mode ends up rendering
+   on the wrong ground. */
+[data-testid="stSelectbox"] > div > div,
+[data-testid="stMultiSelect"] > div > div,
+[data-testid="stTextInput"] > div > div,
+[data-testid="stTextArea"] > div > div,
+[data-testid="stNumberInput"] > div > div,
+[data-testid="stDateInput"] > div > div,
+[data-testid="stTimeInput"] > div > div,
+[data-baseweb="select"] > div {{
+  background:var(--sunken) !important;
+  border-color:var(--border) !important;
+  color:var(--ink) !important;
+}}
+[data-testid="stSelectbox"] input, [data-testid="stMultiSelect"] input,
+[data-testid="stTextInput"] input, [data-testid="stNumberInput"] input,
+[data-testid="stTextArea"] textarea {{ color:var(--ink) !important; }}
+[data-baseweb="popover"] > div, [data-baseweb="menu"], ul[role="listbox"] {{
+  background:var(--raised) !important; border:1px solid var(--border) !important;
+  box-shadow:var(--shadow-overlay) !important;
+}}
+li[role="option"] {{ background:transparent !important; color:var(--ink) !important; }}
+li[role="option"]:hover, li[role="option"][aria-selected="true"] {{
+  background:var(--hover) !important;
 }}
 
 /* ---- inputs ---- */
@@ -384,9 +479,293 @@ label, [data-testid="stWidgetLabel"] p {{
 }}
 .dsai-empty strong {{ color:var(--ink-2); display:block; margin-bottom:.28rem; font-size:.9rem; }}
 
-/* ---- dark mode: config.toml sets a static base, so the widget internals
-       Streamlit paints itself have to be reached here ---- */
-{dark_rules}
+/* ======================================================================
+   The premium layer: chrome, AI surfaces, and the pieces the workspace is
+   assembled from. Every component below is built from the same tokens as
+   everything above it: spacing from the --s tokens, radius from --r, motion
+   from --m and --ease. One design language rather than a collection of
+   one-off treatments.
+   ====================================================================== */
+
+/* ---- top strip: project, command bar, state ---- */
+.dsai-top {{
+  display:flex; align-items:center; gap:var(--s-md);
+  padding:.55rem 0 .7rem; margin:-1.4rem 0 var(--s-lg);
+  border-bottom:1px solid var(--border);
+}}
+.dsai-top-project {{ display:flex; align-items:baseline; gap:.55rem; min-width:0; }}
+.dsai-top-brand {{
+  font-size:var(--t-caption); font-weight:700; color:var(--ink);
+  letter-spacing:-.01em; white-space:nowrap;
+}}
+.dsai-top-name {{
+  font-size:var(--t-caption); color:var(--ink-3); white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; max-width:22ch;
+}}
+.dsai-top-spacer {{ flex:1 1 auto; }}
+.dsai-top-state {{
+  display:inline-flex; align-items:center; gap:.4rem; font-size:var(--t-eyebrow);
+  letter-spacing:.06em; text-transform:uppercase; font-weight:600; color:var(--ink-3);
+  white-space:nowrap;
+}}
+.dsai-kbd {{
+  font-family:var(--mono); font-size:.68rem; color:var(--ink-3);
+  border:1px solid var(--border-strong); border-radius:var(--r-sm);
+  padding:.05rem .3rem; background:var(--sunken); white-space:nowrap;
+}}
+
+/* ---- badges: state in a word and a shape, never in a colour alone ---- */
+.dsai-badge {{
+  display:inline-flex; align-items:center; gap:.3rem; font-size:var(--t-eyebrow);
+  font-weight:600; letter-spacing:.05em; text-transform:uppercase;
+  padding:.12rem .45rem; border-radius:var(--r-sm); border:1px solid var(--border);
+  color:var(--ink-2); background:var(--sunken); white-space:nowrap;
+}}
+.dsai-badge[data-tone="accent"] {{
+  color:var(--accent-ink); border-color:var(--accent); background:var(--accent-soft);
+}}
+.dsai-badge[data-tone="good"] {{ color:var(--good); border-color:var(--good); background:transparent; }}
+.dsai-badge[data-tone="warning"] {{ color:var(--warning); border-color:var(--warning); background:transparent; }}
+.dsai-badge[data-tone="critical"] {{ color:var(--critical); border-color:var(--critical); background:transparent; }}
+
+/* ---- the AI surfaces ----
+   There is no ninth hue available for "AI" — every candidate sits too close to
+   a categorical slot for a reader to separate them. So AI is marked by the ✦,
+   by the deep end of the accent's own ramp, and by motion. None of those can be
+   mistaken for a data series. */
+.dsai-ai {{
+  max-width:54rem;
+  border:1px solid var(--border); border-left:2px solid var(--accent);
+  border-radius:var(--r-md); background:var(--surface);
+  padding:var(--s-md) 1.1rem; margin:var(--s-md) 0 var(--s-lg);
+  box-shadow:var(--shadow);
+}}
+.dsai-ai-head {{
+  display:flex; align-items:center; gap:.45rem; margin-bottom:.6rem;
+  font-size:var(--t-eyebrow); text-transform:uppercase; letter-spacing:.08em;
+  font-weight:700; color:var(--accent-ink);
+}}
+.dsai-ai-mark {{ font-size:.8rem; line-height:1; }}
+.dsai-ai-body {{ color:var(--ink); font-size:var(--t-body); line-height:1.62; max-width:64ch; }}
+.dsai-ai-body p {{ margin:0 0 .5rem; }}
+.dsai-ai-rule {{ border:0; border-top:1px solid var(--border); margin:.85rem 0; }}
+.dsai-ai-why {{
+  font-size:var(--t-caption); color:var(--ink-2); line-height:1.55; max-width:64ch;
+}}
+.dsai-ai-why strong {{ color:var(--ink); font-weight:600; }}
+
+/* AI at work: the mark breathes rather than a spinner going round. Suppressed
+   entirely by reduce-motion, where the stage list alone carries the state. */
+.dsai-ai[data-busy="yes"] .dsai-ai-mark {{ animation:dsai-pulse 1.9s var(--ease) infinite; }}
+@keyframes dsai-pulse {{ 0%,100% {{ opacity:.35; }} 50% {{ opacity:1; }} }}
+
+/* ---- staged progress: named work, not a spinner ---- */
+.dsai-stages {{ list-style:none; margin:.6rem 0 .2rem; padding:0; }}
+.dsai-stage {{
+  display:flex; align-items:baseline; gap:.6rem; padding:.2rem 0;
+  font-size:var(--t-caption); line-height:1.5; color:var(--ink-3);
+}}
+.dsai-stage-mark {{
+  font-family:var(--mono); font-size:.72rem; width:1.1rem; flex:0 0 auto; text-align:center;
+}}
+.dsai-stage[data-state="done"] {{ color:var(--ink-2); }}
+.dsai-stage[data-state="done"] .dsai-stage-mark {{ color:var(--good); }}
+.dsai-stage[data-state="running"] {{ color:var(--ink); font-weight:600; }}
+.dsai-stage[data-state="running"] .dsai-stage-mark {{
+  color:var(--accent); animation:dsai-pulse 1.4s var(--ease) infinite;
+}}
+.dsai-stage[data-state="failed"] {{ color:var(--critical); }}
+.dsai-stage[data-state="warning"] .dsai-stage-mark {{ color:var(--warning); }}
+.dsai-stage-detail {{ color:var(--ink-3); font-weight:400; }}
+
+/* ---- skeletons: never a blank screen ---- */
+.dsai-skeleton {{ display:block; margin:.45rem 0; }}
+.dsai-skeleton span {{
+  display:block; height:.7rem; border-radius:var(--r-sm); margin-bottom:.45rem;
+  background:linear-gradient(90deg, var(--sunken) 0%, var(--border) 50%, var(--sunken) 100%);
+  background-size:200% 100%; animation:dsai-shimmer 1.4s linear infinite;
+}}
+@keyframes dsai-shimmer {{ 0% {{ background-position:200% 0; }} 100% {{ background-position:-200% 0; }} }}
+
+/* ---- quality bars ---- */
+.dsai-bars {{ margin:.6rem 0 1.2rem; }}
+.dsai-bar-row {{
+  display:grid; grid-template-columns:minmax(7rem,11rem) 1fr 3.2rem;
+  align-items:center; gap:var(--s-md); padding:.32rem 0;
+}}
+.dsai-bar-label {{ font-size:var(--t-caption); color:var(--ink-2); }}
+.dsai-bar-track {{
+  height:6px; border-radius:var(--r-pill); background:var(--sunken);
+  border:1px solid var(--border-faint); overflow:hidden;
+}}
+.dsai-bar-fill {{
+  height:100%; border-radius:var(--r-pill); background:var(--accent);
+  transition:width var(--m-slow) var(--ease);
+}}
+.dsai-bar-row[data-tone="good"] .dsai-bar-fill {{ background:var(--good); }}
+.dsai-bar-row[data-tone="warning"] .dsai-bar-fill {{ background:var(--warning); }}
+.dsai-bar-row[data-tone="critical"] .dsai-bar-fill {{ background:var(--critical); }}
+.dsai-bar-value {{
+  font-size:var(--t-caption); color:var(--ink); text-align:right;
+  font-variant-numeric:tabular-nums; font-weight:600;
+}}
+
+/* ---- the hero figure ---- */
+.dsai-hero {{ display:flex; align-items:baseline; gap:.7rem; margin:.2rem 0 .1rem; }}
+.dsai-hero-value {{
+  font-size:2.75rem; font-weight:600; letter-spacing:-.03em; line-height:1;
+  color:var(--ink);
+}}
+.dsai-hero-unit {{ font-size:1rem; color:var(--ink-3); font-weight:500; }}
+
+/* ---- pipeline graph: the chain, drawn ---- */
+.dsai-pipe {{ margin:.6rem 0 1.3rem; }}
+.dsai-pipe-node {{
+  position:relative; border:1px solid var(--border); border-radius:var(--r-md);
+  background:var(--surface); padding:.55rem .8rem; margin:0 0 1.35rem;
+  transition:border-color var(--m-fast) var(--ease), box-shadow var(--m-fast) var(--ease);
+}}
+.dsai-pipe-node:hover {{ border-color:var(--border-strong); box-shadow:var(--shadow); }}
+.dsai-pipe-node:not(:last-child)::after {{
+  content:""; position:absolute; left:1.6rem; top:100%; width:1.5px; height:1.35rem;
+  background:var(--border-strong);
+}}
+.dsai-pipe-node:not(:last-child)::before {{
+  content:""; position:absolute; left:calc(1.6rem - 3px); top:calc(100% + 1rem);
+  border-left:4px solid transparent; border-right:4px solid transparent;
+  border-top:5px solid var(--border-strong);
+}}
+.dsai-pipe-node[data-kind="source"] {{ border-style:dashed; background:var(--sunken); }}
+.dsai-pipe-node[data-kind="model"] {{ border-left:2px solid var(--accent); }}
+.dsai-pipe-row {{ display:flex; align-items:baseline; gap:.6rem; }}
+.dsai-pipe-index {{
+  font-family:var(--mono); font-size:.7rem; color:var(--ink-3); width:1.5rem; flex:0 0 auto;
+}}
+.dsai-pipe-name {{ font-size:var(--t-caption); font-weight:600; color:var(--ink); }}
+.dsai-pipe-scope {{
+  font-size:var(--t-eyebrow); text-transform:uppercase; letter-spacing:.06em;
+  color:var(--ink-3); font-weight:600;
+}}
+.dsai-pipe-detail {{
+  font-size:var(--t-caption); color:var(--ink-3); margin:.18rem 0 0 2.1rem; line-height:1.5;
+}}
+
+/* ---- ranked list: models, insights, recommendations ---- */
+.dsai-rank {{
+  display:grid; grid-template-columns:2.4rem 1fr; gap:.2rem var(--s-md);
+  padding:var(--s-md) 0; border-top:1px solid var(--border); align-items:start;
+}}
+.dsai-rank:last-child {{ border-bottom:1px solid var(--border); }}
+.dsai-rank-index {{
+  font-family:var(--mono); font-size:1.05rem; font-weight:600; color:var(--ink-3);
+  line-height:1.3; font-variant-numeric:tabular-nums;
+}}
+.dsai-rank[data-lead="yes"] .dsai-rank-index {{ color:var(--accent); }}
+.dsai-rank-head {{ display:flex; align-items:baseline; gap:.6rem; flex-wrap:wrap; }}
+.dsai-rank-title {{
+  font-size:1rem; font-weight:600; color:var(--ink); letter-spacing:-.008em; line-height:1.35;
+}}
+.dsai-rank-body {{ font-size:var(--t-caption); color:var(--ink-2); line-height:1.6; max-width:70ch; }}
+.dsai-rank-metrics {{
+  display:flex; gap:var(--s-lg); flex-wrap:wrap; margin:.45rem 0 .1rem;
+}}
+.dsai-rank-metric {{ min-width:5rem; }}
+.dsai-rank-metric dt {{
+  font-size:var(--t-eyebrow); text-transform:uppercase; letter-spacing:.07em;
+  color:var(--ink-3); font-weight:600; margin:0 0 .1rem;
+}}
+.dsai-rank-metric dd {{
+  margin:0; font-size:.9375rem; font-weight:600; color:var(--ink);
+  font-variant-numeric:tabular-nums;
+}}
+
+/* ---- leaderboard ---- */
+.dsai-board td[data-lead="yes"], .dsai-board tr[data-lead="yes"] td {{
+  background:var(--selected);
+}}
+.dsai-board tr[data-lead="yes"] td:first-child {{ box-shadow:inset 2px 0 0 var(--accent); }}
+.dsai-num {{ text-align:right; font-variant-numeric:tabular-nums; }}
+
+/* ---- error state: what went wrong, and the way out ---- */
+.dsai-error {{
+  border:1px solid var(--critical); border-radius:var(--r-md); background:var(--surface);
+  padding:1rem 1.1rem; margin:var(--s-md) 0 var(--s-lg);
+}}
+.dsai-error-title {{
+  font-size:1rem; font-weight:600; color:var(--ink); margin-bottom:.3rem;
+  display:flex; align-items:center; gap:.45rem;
+}}
+.dsai-error-body {{ font-size:var(--t-caption); color:var(--ink-2); line-height:1.6; max-width:64ch; }}
+.dsai-error-fix {{
+  margin-top:.7rem; padding-top:.7rem; border-top:1px solid var(--border);
+  font-size:var(--t-caption); color:var(--ink); line-height:1.6;
+}}
+.dsai-error-fix strong {{
+  display:block; font-size:var(--t-eyebrow); text-transform:uppercase; letter-spacing:.07em;
+  color:var(--ink-3); margin-bottom:.25rem;
+}}
+
+/* ---- empty state, upgraded from a dashed box to an invitation ---- */
+.dsai-empty {{
+  border:1px dashed var(--border-strong); border-radius:var(--r-lg);
+  padding:2.2rem 1.75rem; text-align:left; margin:var(--s-lg) 0;
+  background:var(--surface);
+}}
+.dsai-empty strong {{
+  color:var(--ink); display:block; margin-bottom:.4rem; font-size:1.05rem;
+  font-weight:600; letter-spacing:-.01em;
+}}
+.dsai-empty-body {{
+  color:var(--ink-2); font-size:var(--t-caption); line-height:1.6; max-width:52ch;
+}}
+
+/* ---- column card, for the dataset workspace ---- */
+.dsai-colcard {{
+  border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface);
+  padding:.85rem 1rem; margin-bottom:.5rem;
+}}
+.dsai-colcard-head {{ display:flex; align-items:baseline; gap:.6rem; flex-wrap:wrap; }}
+.dsai-colcard-name {{ font-size:.9375rem; font-weight:600; color:var(--ink); font-family:var(--mono); }}
+.dsai-colfacts {{
+  display:flex; gap:var(--s-lg); flex-wrap:wrap; margin-top:.55rem;
+}}
+.dsai-colfact dt {{
+  font-size:var(--t-eyebrow); text-transform:uppercase; letter-spacing:.07em;
+  color:var(--ink-3); font-weight:600; margin:0 0 .1rem;
+}}
+.dsai-colfact dd {{
+  margin:0; font-size:var(--t-caption); color:var(--ink); font-variant-numeric:tabular-nums;
+}}
+
+/* ---- structural accessibility: always present, not a preference ---- */
+.dsai-skip {{
+  position:absolute; left:-9999px; top:0; z-index:9999;
+  background:var(--accent); color:#fff; padding:.6rem 1rem;
+  border-radius:0 0 var(--r-md) 0;
+  font-size:var(--t-caption); font-weight:600; text-decoration:none;
+}}
+.dsai-skip:focus {{ left:0; }}
+/* Read by a screen reader, invisible on screen. Not display:none, which would
+   take it out of the accessibility tree along with everything else. */
+.dsai-sr {{
+  position:absolute !important; width:1px; height:1px; padding:0; margin:-1px;
+  overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0;
+}}
+
+/* ---- tooltips on our own elements ---- */
+[data-dsai-tip] {{ position:relative; border-bottom:1px dotted var(--border-strong); cursor:help; }}
+[data-dsai-tip]:hover::after, [data-dsai-tip]:focus-visible::after {{
+  content:attr(data-dsai-tip); position:absolute; bottom:calc(100% + 6px); left:0;
+  z-index:50; width:max-content; max-width:26rem; padding:.5rem .65rem;
+  background:var(--raised); color:var(--ink); border:1px solid var(--border-strong);
+  border-radius:var(--r-md); box-shadow:var(--shadow-overlay);
+  font-size:var(--t-caption); font-weight:400; line-height:1.5; white-space:normal;
+  text-transform:none; letter-spacing:normal;
+}}
+
+/* ---- mode corrections: config.toml sets a static dark base, so the widget
+       internals Streamlit paints itself have to be reached here ---- */
+{mode_rules}
 
 @media (max-width:1280px) {{
   [data-testid="stAppViewContainer"] .main .block-container {{ padding-left:2rem; padding-right:2rem; }}
@@ -396,15 +775,143 @@ label, [data-testid="stWidgetLabel"] p {{
 """
 
 
-def apply_theme(mode: str = "light") -> None:
+_ACCESS_RULES = """
+/* ---- accessibility ----
+   Focus is never invisible. Streamlit's default outline disappears against
+   several of our surfaces, so it is replaced rather than relied on. */
+:where(a, button, summary, input, select, textarea, [role="button"],
+       [role="tab"], [data-baseweb="select"] > div, [tabindex]):focus-visible {
+  outline:3px solid var(--focus) !important;
+  outline-offset:2px !important;
+  border-radius:4px;
+}
+"""
+
+_HIGH_CONTRAST = {
+    "light": """
+:root {
+  --ink:#000000; --ink-2:#1f1f1f; --ink-3:#2f2f2f;
+  --border:#5a5a5a; --border-strong:#000000;
+  --surface:#ffffff; --raised:#ffffff; --sunken:#f0f0f0;
+  --accent:#0b4a9c; --accent-ink:#08376f; --accent-soft:#dbe8f8;
+  --shadow:none;
+}
+[data-testid="stAppViewContainer"] *, [data-testid="stSidebar"] * { text-shadow:none !important; }
+.dsai-card, .dsai-panel, [data-testid="stVerticalBlockBorderWrapper"],
+[data-testid="stExpander"], [data-testid="stAlert"] { border:2px solid var(--border-strong) !important; }
+.stButton button, .stDownloadButton button { border:2px solid var(--border-strong) !important; }
+""",
+    "dark": """
+:root {
+  --ink:#ffffff; --ink-2:#eeeeee; --ink-3:#d8d8d8;
+  --border:#a8a8a8; --border-strong:#ffffff;
+  --surface:#000000; --raised:#0d0d0d; --sunken:#141414;
+  --accent:#7fb8ff; --accent-ink:#a9d0ff; --accent-soft:#12294a;
+  --shadow:none;
+}
+.dsai-card, .dsai-panel, [data-testid="stVerticalBlockBorderWrapper"],
+[data-testid="stExpander"], [data-testid="stAlert"] { border:2px solid var(--border-strong) !important; }
+.stButton button, .stDownloadButton button { border:2px solid var(--border-strong) !important; }
+""",
+}
+
+_REDUCE_MOTION = """
+*, *::before, *::after {
+  animation-duration:.001ms !important; animation-iteration-count:1 !important;
+  transition-duration:.001ms !important; scroll-behavior:auto !important;
+}
+"""
+
+# Honoured whether or not the setting is switched on, because the operating
+# system has already been asked and answering it twice is not the user's job.
+_REDUCE_MOTION_MEDIA = f"""
+@media (prefers-reduced-motion: reduce) {{ {_REDUCE_MOTION} }}
+"""
+
+_UNDERLINE_LINKS = """
+[data-testid="stAppViewContainer"] a:not(.dsai-skip),
+[data-testid="stSidebar"] a:not([data-testid="stPageLink"] a) {
+  text-decoration:underline !important; text-underline-offset:2px;
+}
+"""
+
+
+def _accessibility_css(mode: str, access: Any) -> str:
+    """Everything the accessibility settings add on top of the base stylesheet.
+
+    Layered after the base sheet so it overrides it, and written as token
+    redefinitions rather than per-component rules wherever possible — one
+    change then reaches every component that already uses the token.
+    """
+    scale = getattr(access, "text_scale", 1.0) or 1.0
+    rules = [_ACCESS_RULES, _REDUCE_MOTION_MEDIA]
+
+    # The focus ring must clear 3:1 against both the surface and the component
+    # it rings, so it is not the accent colour in either mode.
+    rules.append(
+        ":root { --focus:%s; }" % ("#ffd400" if mode == "dark" else "#0b4a9c")
+    )
+
+    if scale != 1.0:
+        rules.append(f"""
+:root {{
+  --t-title:{_scaled(TYPE_SCALE['title'], scale)};
+  --t-section:{_scaled(TYPE_SCALE['section'], scale)};
+  --t-body:{_scaled(TYPE_SCALE['body'], scale)};
+  --t-caption:{_scaled(TYPE_SCALE['caption'], scale)};
+  --t-eyebrow:{_scaled(TYPE_SCALE['eyebrow'], scale)};
+}}
+html, body, [data-testid="stAppViewContainer"], [data-testid="stSidebar"] {{
+  font-size:var(--t-body);
+}}
+/* Streamlit hard-codes several sizes; scale them from the same factor rather
+   than letting the page fall out of proportion. */
+[data-testid="stAppViewContainer"] p, [data-testid="stAppViewContainer"] li,
+[data-testid="stAppViewContainer"] label, [data-testid="stMarkdownContainer"] p,
+[data-testid="stCaptionContainer"], [data-testid="stMetricValue"],
+.stButton button, .stDownloadButton button, [data-baseweb="select"] {{
+  font-size:calc(1em * {scale}) !important;
+}}
+[data-testid="stAppViewContainer"] .main .block-container {{ max-width:{74 / scale:.1f}rem; }}
+""")
+
+    if getattr(access, "high_contrast", False):
+        rules.append(_HIGH_CONTRAST["dark" if mode == "dark" else "light"])
+    if getattr(access, "reduce_motion", False):
+        rules.append(_REDUCE_MOTION)
+    if getattr(access, "underline_links", False):
+        rules.append(_UNDERLINE_LINKS)
+    return "<style>" + "\n".join(rules) + "</style>"
+
+
+def _scaled(size: str, factor: float) -> str:
+    """Scale a CSS length like ``0.94rem`` by *factor*, keeping the unit."""
+    for unit in ("rem", "em", "px"):
+        if size.endswith(unit):
+            try:
+                return f"{float(size[: -len(unit)]) * factor:.3f}{unit}"
+            except ValueError:
+                return size
+    return size
+
+
+def apply_theme(mode: str = "dark", access: Any = None) -> None:
     """Inject the stylesheet. Every page calls this once, at the top.
 
     All custom styling lives here rather than being scattered across pages, so
-    there is exactly one place to change how the app looks.
+    there is exactly one place to change how the app looks. The accessibility
+    layer goes on last so it wins, and is read off the workspace when it is not
+    passed in — the pages should not each have to remember to forward it.
     """
     import streamlit as st
 
     st.markdown(_stylesheet(mode), unsafe_allow_html=True)
+
+    if access is None:
+        workspace = st.session_state.get("dsai_workspace")
+        access = getattr(workspace, "access", None)
+    if access is not None:
+        st.markdown(_accessibility_css(mode, access), unsafe_allow_html=True)
 
 
 def _navigation() -> None:
@@ -430,16 +937,26 @@ def _navigation() -> None:
     st.divider()
 
 
-def sidebar_chrome(state: Any) -> None:
-    """Shared sidebar: what is loaded, and the appearance toggle.
+def sidebar_chrome(state: Any, working: str = "") -> None:
+    """The workspace chrome: the top strip, the navigation rail, and settings.
 
     Rendered on every page rather than only the landing page, because a
     multipage Streamlit app runs each page in isolation and the user needs the
-    same orientation wherever they are.
+    same orientation wherever they are. Called once per page, straight after
+    ``apply_theme``.
     """
     import streamlit as st
 
+    # The strip goes to the main area; everything after it goes to the rail.
+    top_strip(state, working=working)
+
     with st.sidebar:
+        # First focusable thing in the rail, so a keyboard user reaches the page
+        # in two stops rather than after the whole navigation.
+        st.markdown(
+            '<a class="dsai-skip" href="#dsai-main">Skip to the main content</a>',
+            unsafe_allow_html=True,
+        )
         _navigation()
         st.markdown('<div class="dsai-eyebrow">Workspace</div>', unsafe_allow_html=True)
         if getattr(state, "has_data", False):
@@ -464,14 +981,82 @@ def sidebar_chrome(state: Any) -> None:
 
         st.divider()
         chosen = st.radio(
-            "Appearance", ["light", "dark"],
-            index=0 if state.theme == "light" else 1,
+            "Appearance", ["dark", "light"],
+            index=0 if state.theme == "dark" else 1,
             horizontal=True, key="dsai_theme_toggle",
             help="Applies to the interface and the charts together.",
         )
         if chosen != state.theme:
             state.theme = chosen
             st.rerun()
+
+        _accessibility_controls(state)
+
+
+_TEXT_SIZES = {"Normal": 1.0, "Large": 1.15, "Larger": 1.3, "Largest": 1.5}
+
+
+def _accessibility_controls(state: Any) -> None:
+    """The accessibility settings, in the sidebar on every page.
+
+    In an expander rather than a separate page: someone who needs larger text
+    needs it on the page they are on, not after navigating somewhere with text
+    they cannot read.
+    """
+    import streamlit as st
+
+    access = getattr(state, "access", None)
+    if access is None:
+        return
+
+    summary = "Accessibility"
+    if access.any_enabled:
+        summary += " · on"
+    with st.expander(summary, expanded=False):
+        current = next((label for label, value in _TEXT_SIZES.items()
+                        if abs(value - access.text_scale) < 1e-6), "Normal")
+        size = st.select_slider(
+            "Text size", list(_TEXT_SIZES), value=current, key="dsai_text_size",
+            help="Scales the whole interface, not just the body text.",
+        )
+        contrast = st.checkbox(
+            "High contrast", access.high_contrast, key="dsai_contrast",
+            help="Maximum contrast ink, heavier borders, no shadows. Charts keep their "
+                 "own validated palette.",
+        )
+        motion = st.checkbox(
+            "Reduce motion", access.reduce_motion, key="dsai_motion",
+            help="Removes transitions and animation. Your operating system setting is "
+                 "already honoured; this is for when it is not set.",
+        )
+        tables = st.checkbox(
+            "Always show chart data", access.always_show_tables, key="dsai_tables",
+            help="Every chart's numbers are shown as a table without needing to expand it.",
+        )
+        underline = st.checkbox(
+            "Underline links", access.underline_links, key="dsai_underline",
+            help="So a link is not distinguished from body text by colour alone.",
+        )
+
+        changed = (
+            _TEXT_SIZES[size] != access.text_scale
+            or contrast != access.high_contrast
+            or motion != access.reduce_motion
+            or tables != access.always_show_tables
+            or underline != access.underline_links
+        )
+        if changed:
+            access.text_scale = _TEXT_SIZES[size]
+            access.high_contrast = contrast
+            access.reduce_motion = motion
+            access.always_show_tables = tables
+            access.underline_links = underline
+            st.rerun()
+
+        st.caption(
+            "Charts always carry their numbers as a table and a written caption, whether or "
+            "not these are on."
+        )
 
 
 def _esc(text: Any) -> str:
@@ -490,6 +1075,10 @@ def _rich(text: Any) -> str:
     out = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", out)
     out = re.sub(r"(?<!\*)\*([^*]+?)\*(?!\*)", r"<em>\1</em>", out)
     out = re.sub(r"`([^`]+?)`", r"<code>\1</code>", out)
+    # Markdown's two-space line break, and a bare newline, both become one.
+    # Without this, separate evidence lines run together into one sentence.
+    out = re.sub(r"[ \t]{2,}\n", "<br>", out)
+    out = out.replace("\n\n", "<br><br>").replace("\n", "<br>")
     return out
 
 
@@ -500,13 +1089,123 @@ def _rich(text: Any) -> str:
 def page_header(title: str, subtitle: str = "", step: str = "") -> None:
     import streamlit as st
 
-    block = []
+    # The landing point for the skip link, and the start of the page's own
+    # heading order — every page has exactly one h1, and it is this one.
+    block = ['<span id="dsai-main" tabindex="-1"></span>']
     if step:
         block.append(f'<div class="dsai-eyebrow">{_esc(step)}</div>')
     block.append(f"<h1>{_esc(title)}</h1>")
     if subtitle:
         block.append(f'<p class="dsai-lede">{_esc(subtitle)}</p>')
     st.markdown("".join(block), unsafe_allow_html=True)
+
+
+def chart(
+    figure: Any,
+    caption: str = "",
+    key: str | None = None,
+    table: pd.DataFrame | None = None,
+    alt: str = "",
+    container: Any = None,
+) -> None:
+    """A chart with the numbers behind it always reachable.
+
+    A Plotly chart is a canvas: a screen reader finds nothing in it, and neither
+    does anyone printing in black and white. So every chart in this app ships
+    with its own data, extracted from the figure itself rather than assembled by
+    hand at each call site — which means no chart can be added without one.
+
+    The table is behind an expander by default and open by default for anyone
+    who has asked for that in the accessibility settings.
+    """
+    import streamlit as st
+
+    target = container if container is not None else st
+    target.plotly_chart(figure, use_container_width=True, key=key)
+    if caption:
+        target.caption(caption)
+
+    if table is None:
+        table = figure_to_frame(figure)
+    if table is None or table.empty:
+        return
+
+    workspace = st.session_state.get("dsai_workspace")
+    always = bool(getattr(getattr(workspace, "access", None), "always_show_tables", False))
+    label = alt or "The numbers behind this chart"
+    with target.expander(label, expanded=always):
+        st.dataframe(table, use_container_width=True, hide_index=True)
+
+
+def figure_to_frame(figure: Any, max_rows: int = 500) -> pd.DataFrame | None:
+    """The data inside a Plotly figure, as a table.
+
+    Deliberately generic rather than clever: it handles the trace shapes this
+    app actually draws (bar, scatter, line, heatmap, box) and returns ``None``
+    for anything it does not understand, so a chart it cannot read is simply a
+    chart with no table rather than a crash.
+    """
+    if figure is None:
+        return None
+    try:
+        traces = list(figure.data)
+    except Exception:
+        return None
+    if not traces:
+        return None
+
+    blocks: list[pd.DataFrame] = []
+    for index, trace in enumerate(traces):
+        name = getattr(trace, "name", None) or f"series {index + 1}"
+        kind = getattr(trace, "type", "")
+
+        if kind == "heatmap":
+            z = getattr(trace, "z", None)
+            if z is None:
+                continue
+            rows = list(getattr(trace, "y", []) or range(len(z)))
+            columns = list(getattr(trace, "x", []) or range(len(z[0])))
+            blocks.append(pd.DataFrame(z, index=rows, columns=columns).reset_index()
+                          .rename(columns={"index": ""}))
+            continue
+
+        x = getattr(trace, "x", None)
+        y = getattr(trace, "y", None)
+        if x is None and y is None:
+            continue
+        length = max(len(x) if x is not None else 0, len(y) if y is not None else 0)
+        if not length:
+            continue
+        block = pd.DataFrame({
+            "Series": [name] * length,
+            "X": list(x) if x is not None else [None] * length,
+            "Y": list(y) if y is not None else [None] * length,
+        })
+        text = getattr(trace, "text", None)
+        if text is not None and len(text) == length:
+            block["Label"] = list(text)
+        blocks.append(block)
+
+    if not blocks:
+        return None
+    frame = pd.concat(blocks, ignore_index=True) if len(blocks) > 1 else blocks[0]
+
+    # A single unnamed series does not need a column saying so.
+    if "Series" in frame.columns and frame["Series"].nunique() == 1:
+        frame = frame.drop(columns=["Series"])
+
+    # Name the axes after the chart's own axis titles where it has them.
+    try:
+        layout = figure.layout
+        renames = {}
+        if getattr(layout.xaxis, "title", None) and layout.xaxis.title.text:
+            renames["X"] = layout.xaxis.title.text
+        if getattr(layout.yaxis, "title", None) and layout.yaxis.title.text:
+            renames["Y"] = layout.yaxis.title.text
+        frame = frame.rename(columns=renames)
+    except Exception:
+        pass
+    return frame.head(max_rows)
 
 
 def workflow_nav(current: str, state: Any = None) -> None:
@@ -528,7 +1227,8 @@ def workflow_nav(current: str, state: Any = None) -> None:
             "has_run": bool(getattr(state, "has_run", False)),
         }
 
-    parts = ['<ol class="dsai-steps">']
+    spoken = {"current": "current step", "done": "completed", "todo": "not started"}
+    parts = ['<ol class="dsai-steps" aria-label="Workflow progress">']
     for index, (label, flag) in enumerate(WORKFLOW_STAGES):
         is_current = label.lower() == current.lower()
         complete = done.get(flag, False)
@@ -539,8 +1239,9 @@ def workflow_nav(current: str, state: Any = None) -> None:
         parts.append(
             f'<li class="dsai-step" data-state="{state_name}" '
             f'data-complete="{"yes" if complete else "no"}"{aria}>'
-            f'<span class="dsai-dot">{"✓" if state_name == "done" else ""}</span>'
+            f'<span class="dsai-dot" aria-hidden="true">{"✓" if state_name == "done" else ""}</span>'
             f'<span class="dsai-step-label">{_esc(label)}</span>'
+            f'<span class="dsai-sr"> — {spoken[state_name]}</span>'
             f"</li>"
         )
     parts.append("</ol>")
@@ -593,8 +1294,354 @@ def confidence_badge(confidence: Confidence) -> str:
 
 
 def _confidence_html(confidence: Confidence) -> str:
+    """The glyph is decoration; the word is the content.
+
+    ``aria-hidden`` on the dots stops a screen reader announcing "black circle,
+    black circle, white circle" before the word that actually says it.
+    """
     mark, word = CONFIDENCE_MARK.get(confidence, ("○○○", "unknown"))
-    return f'<span class="dsai-conf">{mark}</span> {word}'
+    return f'<span class="dsai-conf" aria-hidden="true">{mark}</span> {word}'
+
+
+# --------------------------------------------------------------------------
+# the workspace chrome
+# --------------------------------------------------------------------------
+
+def top_strip(state: Any, working: str = "") -> None:
+    """The one strip of chrome above the page: where you are, and what the AI is doing.
+
+    Deliberately a strip and not a bar. Streamlit owns the real browser-chrome
+    header and cannot be given a functioning top navigation, so rather than fake
+    one badly this carries only what a top bar is actually for: identity,
+    context, and the state of the system.
+    """
+    import streamlit as st
+
+    name = getattr(state, "dataset_name", "") or "no dataset"
+    if getattr(state, "has_run", False) and not working:
+        status, tone = "analysis complete", "good"
+    elif working:
+        status, tone = working, "accent"
+    elif getattr(state, "has_data", False):
+        status, tone = "ready to analyse", "accent"
+    else:
+        status, tone = "waiting for data", "neutral"
+
+    st.markdown(
+        '<div class="dsai-top">'
+        '<div class="dsai-top-project">'
+        '<span class="dsai-top-brand">DSAI</span>'
+        f'<span class="dsai-top-name">{_esc(name)}</span>'
+        "</div>"
+        '<div class="dsai-top-spacer"></div>'
+        f'<span class="dsai-top-state">{AI_MARK} {_esc(status)}</span>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def badge(text: str, tone: str = "neutral") -> str:
+    """A small state marker. Returns HTML — never sets state by colour alone."""
+    return f'<span class="dsai-badge" data-tone="{_esc(tone)}">{_esc(text)}</span>'
+
+
+def ai_panel(
+    body: str,
+    why: str = "",
+    heading: str = "AI Analyst",
+    confidence: Any = None,
+    busy: bool = False,
+    evidence: list[str] | None = None,
+) -> None:
+    """The AI speaking in its own voice, in its own surface.
+
+    One panel, not a chat transcript: the platform is a colleague reporting a
+    finding, not a bot waiting for the next message. Everything it says arrives
+    with its reasoning and its confidence attached, because a claim without
+    those is not something a reader can act on.
+    """
+    import streamlit as st
+
+    parts = [
+        f'<div class="dsai-ai" data-busy="{"yes" if busy else "no"}">',
+        f'<div class="dsai-ai-head"><span class="dsai-ai-mark">{AI_MARK}</span>'
+        f"<span>{_esc(heading)}</span>",
+    ]
+    if confidence is not None:
+        parts.append(
+            f'<span style="margin-left:auto;text-transform:none;letter-spacing:0;'
+            f'font-weight:500;color:var(--ink-3)">confidence {_confidence_html(confidence)}</span>'
+        )
+    parts.append("</div>")
+    parts.append(f'<div class="dsai-ai-body">{_rich(body)}</div>')
+
+    if evidence:
+        parts.append('<hr class="dsai-ai-rule">')
+        items = "".join(f"<li>{_rich(item)}</li>" for item in evidence[:4])
+        parts.append(
+            '<div class="dsai-ai-why"><strong>Evidence</strong>'
+            f'<ul style="margin:.3rem 0 0;padding-left:1.1rem">{items}</ul></div>'
+        )
+    if why:
+        parts.append('<hr class="dsai-ai-rule">')
+        parts.append(f'<div class="dsai-ai-why"><strong>Why</strong><br>{_rich(why)}</div>')
+    parts.append("</div>")
+    st.markdown("".join(parts), unsafe_allow_html=True)
+
+
+#: The stages an analysis actually moves through, in order. Named here so the
+#: progress display and the orchestrator's own trace agree about the work.
+ANALYSIS_STAGES = [
+    ("Understanding your dataset", "profile"),
+    ("Checking data quality", "quality"),
+    ("Working out what it can answer", "objective"),
+    ("Designing preprocessing", "preprocess"),
+    ("Choosing candidate models", "select"),
+    ("Running experiments", "experiment"),
+    ("Comparing results", "compare"),
+    ("Explaining the winner", "explain"),
+    ("Checking its own conclusions", "selfcheck"),
+    ("Writing up findings", "insight"),
+]
+
+_STAGE_MARK = {"done": "✓", "running": "◆", "todo": "·", "failed": "✗",
+               "warning": "!", "skipped": "–"}
+
+
+def stage_progress(stages: list[tuple[str, str, str]]) -> str:
+    """Named stages with their state. Returns HTML so it can be re-rendered in place.
+
+    Each entry is ``(label, state, detail)``. A spinner says only "something is
+    happening"; this says what, which is the difference between a system that
+    feels slow and one that feels busy.
+    """
+    rows = []
+    for label, state, detail in stages:
+        mark = _STAGE_MARK.get(state, "·")
+        extra = f' <span class="dsai-stage-detail">{_esc(detail)}</span>' if detail else ""
+        rows.append(
+            f'<li class="dsai-stage" data-state="{_esc(state)}">'
+            f'<span class="dsai-stage-mark" aria-hidden="true">{mark}</span>'
+            f"<span>{_esc(label)}{extra}</span></li>"
+        )
+    return f'<ul class="dsai-stages" aria-label="Analysis progress">{"".join(rows)}</ul>'
+
+
+def live_stages(events: list[Any], limit: int = 14) -> str:
+    """Trace events as named stages, one line per step, latest state per step.
+
+    The steps are the ones the engine actually announced, not a script written
+    ahead of time — so the display cannot claim work that did not happen. A
+    warning stays visible rather than being replaced by the next step: a caveat
+    that scrolls past is a caveat nobody read.
+    """
+    seen: dict[int, Any] = {}
+    order: list[int] = []
+    for event in events:
+        key = id(event)
+        if key not in seen:
+            order.append(key)
+        seen[key] = event
+    live = [seen[k] for k in order]
+
+    # Keep every warning and failure; trim only the routine successes.
+    notable = [e for e in live if e.status in ("warning", "failed")]
+    recent = live[-limit:]
+    keep = [e for e in live if e in notable or e in recent]
+    return stage_progress([(e.step, e.status, e.detail or "") for e in keep])
+
+
+def skeleton(lines: int = 3, widths: list[int] | None = None) -> str:
+    """A placeholder with the shape of the thing that is coming.
+
+    Returned rather than written, so a caller can put it in a placeholder and
+    swap it for real content without the page jumping.
+    """
+    widths = widths or [100, 82, 64][:lines] + [70] * max(0, lines - 3)
+    bars = "".join(f'<span style="width:{w}%"></span>' for w in widths[:lines])
+    return f'<div class="dsai-skeleton" aria-hidden="true">{bars}</div>'
+
+
+def quality_bars(rows: list[tuple[str, float, str]]) -> None:
+    """Score bars: label, 0-100 value, and a note.
+
+    The bar is the second encoding, not the first — the number is written out
+    beside it, so the reading does not depend on judging a length.
+    """
+    import streamlit as st
+
+    out = ['<div class="dsai-bars">']
+    for label, value, note in rows:
+        value = max(0.0, min(100.0, float(value)))
+        tone = "good" if value >= 90 else "warning" if value >= 70 else "critical"
+        title = f"{label}: {value:.0f} out of 100" + (f". {note}" if note else "")
+        out.append(
+            f'<div class="dsai-bar-row" data-tone="{tone}" role="img" aria-label="{_esc(title)}">'
+            f'<div class="dsai-bar-label">{_esc(label)}</div>'
+            f'<div class="dsai-bar-track"><div class="dsai-bar-fill" style="width:{value:.0f}%"></div></div>'
+            f'<div class="dsai-bar-value">{value:.0f}</div>'
+            "</div>"
+        )
+    out.append("</div>")
+    st.markdown("".join(out), unsafe_allow_html=True)
+
+
+def hero(value: Any, unit: str = "", label: str = "", note: str = "") -> None:
+    """One number, large. For the figure a page exists to deliver."""
+    import streamlit as st
+
+    st.markdown(
+        (f'<div class="dsai-stat-label">{_esc(label)}</div>' if label else "")
+        + '<div class="dsai-hero">'
+        f'<span class="dsai-hero-value">{_esc(value)}</span>'
+        + (f'<span class="dsai-hero-unit">{_esc(unit)}</span>' if unit else "")
+        + "</div>"
+        + (f'<div class="dsai-stat-note">{_esc(note)}</div>' if note else ""),
+        unsafe_allow_html=True,
+    )
+
+
+def pipeline_graph(nodes: list[dict[str, Any]]) -> None:
+    """The pipeline drawn as the chain it is.
+
+    Each node is ``{"name", "scope", "detail", "kind"}``. Drag-and-drop needs a
+    custom front-end component Streamlit does not provide, so ordering is
+    changed with the controls beside the graph rather than by dragging — the
+    graph is the picture, not the editor.
+    """
+    import streamlit as st
+
+    out = ['<div class="dsai-pipe">']
+    for index, node in enumerate(nodes):
+        kind = node.get("kind", "step")
+        number = "" if kind in ("source", "model") else f"{index:02d}"
+        scope = node.get("scope", "")
+        out.append(
+            f'<div class="dsai-pipe-node" data-kind="{_esc(kind)}">'
+            '<div class="dsai-pipe-row">'
+            f'<span class="dsai-pipe-index">{_esc(number)}</span>'
+            f'<span class="dsai-pipe-name">{_esc(node.get("name", ""))}</span>'
+            + (f'<span class="dsai-pipe-scope">{_esc(scope)}</span>' if scope else "")
+            + "</div>"
+            + (f'<div class="dsai-pipe-detail">{_esc(node["detail"])}</div>'
+               if node.get("detail") else "")
+            + "</div>"
+        )
+    out.append("</div>")
+    st.markdown("".join(out), unsafe_allow_html=True)
+
+
+def rank_item(
+    index: int,
+    title: str,
+    body: str = "",
+    metrics: list[tuple[str, Any]] | None = None,
+    badges: list[tuple[str, str]] | None = None,
+    lead: bool = False,
+) -> None:
+    """One entry in a ranked list — a model, an insight, an action.
+
+    The rank is the only ornament. Everything else is type: the title, the
+    reasoning, and the figures that justify the position.
+    """
+    import streamlit as st
+
+    marks = "".join(badge(text, tone) for text, tone in (badges or []))
+    figures = ""
+    if metrics:
+        cells = "".join(
+            f'<div class="dsai-rank-metric"><dt>{_esc(name)}</dt><dd>{_esc(value)}</dd></div>'
+            for name, value in metrics
+        )
+        figures = f'<dl class="dsai-rank-metrics">{cells}</dl>'
+    st.markdown(
+        f'<div class="dsai-rank" data-lead="{"yes" if lead else "no"}">'
+        f'<div class="dsai-rank-index">{index:02d}</div>'
+        "<div>"
+        f'<div class="dsai-rank-head"><span class="dsai-rank-title">{_esc(title)}</span>{marks}</div>'
+        + figures
+        + (f'<div class="dsai-rank-body">{_rich(body)}</div>' if body else "")
+        + "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def leaderboard(rows: list[dict[str, Any]], columns: list[str] | None = None,
+                lead_index: int = 0, numeric: set[str] | None = None) -> None:
+    """A ranked table with the leading row marked in two ways, not one.
+
+    Columns are whatever the caller passes, because the metrics that matter
+    change with the problem: R² and RMSE for a regression, precision and recall
+    for a classifier.
+    """
+    import streamlit as st
+
+    if not rows:
+        return
+    columns = columns or list(rows[0])
+    numeric = numeric or set()
+    head = "".join(
+        f'<th class="{"dsai-num" if c in numeric else ""}">{_esc(c)}</th>' for c in columns
+    )
+    body = []
+    for position, row in enumerate(rows):
+        lead = position == lead_index
+        cells = "".join(
+            f'<td class="{"dsai-num" if c in numeric else ""}">{_esc(row.get(c, "—"))}</td>'
+            for c in columns
+        )
+        body.append(f'<tr data-lead="{"yes" if lead else "no"}">{cells}</tr>')
+    st.markdown(
+        '<div style="overflow-x:auto">'
+        f'<table class="dsai-table dsai-board"><thead><tr>{head}</tr></thead>'
+        f'<tbody>{"".join(body)}</tbody></table></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def error_state(title: str, body: str, fix: str = "") -> None:
+    """An error that says what happened and what to do about it.
+
+    "Model failed" tells the reader nothing they can act on. Every error surface
+    in this app names the cause and proposes the next move.
+    """
+    import streamlit as st
+
+    st.markdown(
+        '<div class="dsai-error">'
+        f'<div class="dsai-error-title"><span aria-hidden="true">▲</span>{_esc(title)}</div>'
+        f'<div class="dsai-error-body">{_rich(body)}</div>'
+        + (f'<div class="dsai-error-fix"><strong>Recommended fix</strong>{_rich(fix)}</div>'
+           if fix else "")
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def column_card(profile_column: Any, currency: str = "") -> None:
+    """One variable, with the facts a reader needs before trusting it."""
+    import streamlit as st
+
+    column = profile_column
+    facts: list[tuple[str, str]] = [
+        ("Type", column.semantic_type.value.replace("_", " ")),
+        ("Missing", f"{column.missing_pct:.1f}%"),
+        ("Distinct", f"{column.n_unique:,}"),
+    ]
+    if column.mean is not None:
+        from dsai.engines.metrics import human_number
+
+        facts += [("Mean", human_number(column.mean)), ("Median", human_number(column.median)),
+                  ("Range", f"{human_number(column.minimum)} – {human_number(column.maximum)}")]
+    cells = "".join(f"<div class='dsai-colfact'><dt>{_esc(n)}</dt><dd>{_esc(v)}</dd></div>"
+                    for n, v in facts)
+    st.markdown(
+        '<div class="dsai-colcard">'
+        f'<div class="dsai-colcard-head"><span class="dsai-colcard-name">{_esc(column.name)}</span>'
+        f'{badge(column.semantic_type.value.replace("_", " "))}</div>'
+        f'<dl class="dsai-colfacts">{cells}</dl></div>',
+        unsafe_allow_html=True,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -616,7 +1663,10 @@ def metric_row(items: list[tuple[str, Any, str]]) -> None:
             + (f'<div class="dsai-stat-note" title="{_esc(note)}">{_esc(note)}</div>' if note else "")
             + "</div>"
         )
-    st.markdown(f'<div class="dsai-stats">{"".join(cells)}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="dsai-stats" role="group" aria-label="Key figures">{"".join(cells)}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def simple_table(rows: list[dict[str, Any]], columns: list[str] | None = None) -> None:
@@ -643,13 +1693,26 @@ def dataframe(frame: pd.DataFrame, **kwargs: Any) -> None:
     st.dataframe(frame, use_container_width=True, hide_index=True, **kwargs)
 
 
-def empty_state(title: str, detail: str = "") -> None:
+def empty_state(title: str, detail: str = "", actions: list[tuple[str, str]] | None = None) -> None:
+    """An empty state that offers the next move rather than reporting an absence.
+
+    ``actions`` are ``(label, page_path)`` pairs rendered as real links, so the
+    way out of the empty state is one click and not a hunt through the sidebar.
+    """
     import streamlit as st
 
     st.markdown(
-        f'<div class="dsai-empty"><strong>{_esc(title)}</strong>{_esc(detail)}</div>',
+        f'<div class="dsai-empty"><strong>{_esc(title)}</strong>'
+        f'<div class="dsai-empty-body">{_rich(detail)}</div></div>',
         unsafe_allow_html=True,
     )
+    if actions:
+        columns = st.columns(len(actions) + 2)
+        for column, (label, page) in zip(columns, actions):
+            try:
+                column.page_link(page, label=label)
+            except Exception:
+                column.markdown(f"**{label}**")
 
 
 # --------------------------------------------------------------------------
@@ -739,8 +1802,11 @@ def quality_issues(profile: Any) -> None:
         return
     for issue in sorted(profile.quality_issues,
                         key=lambda i: {"critical": 0, "warning": 1, "info": 2}.get(i.severity, 3)):
+        # The severity word is in the label as well as the glyph, so the
+        # distinction survives a reader who cannot see the shape or the colour.
         mark = SEVERITY_MARK.get(issue.severity, "■")
-        with st.expander(f"{mark}  {issue.message}", expanded=issue.severity == "critical"):
+        with st.expander(f"{mark}  {issue.severity.capitalize()} — {issue.message}",
+                         expanded=issue.severity == "critical"):
             st.markdown(f'<div class="dsai-meta">{_esc(issue.severity)}</div>', unsafe_allow_html=True)
             if issue.columns:
                 st.markdown("Columns: " + ", ".join(f"`{c}`" for c in issue.columns[:20]))
@@ -776,14 +1842,24 @@ def override_notice(message: str = "") -> None:
 
 def require_data(state: Any) -> bool:
     if not state.has_data:
-        empty_state("No dataset loaded", "Load one on the Data page to begin.")
+        empty_state(
+            "Start your first analysis",
+            "Load a dataset and the platform will profile it, work out what question it can "
+            "answer, and propose an approach — before you have to decide anything.",
+            actions=[("Load a dataset", "pages/1_Data.py")],
+        )
         return False
     return True
 
 
 def require_run(state: Any) -> bool:
     if not state.has_run:
-        empty_state("No analysis yet", "Run one on the Analysis page to see results here.")
+        empty_state(
+            "Nothing has been analysed yet",
+            "This page shows results. Choose what you want to find out on the Analysis page and "
+            "run it — the plan is shown in full before anything executes.",
+            actions=[("Set up the analysis", "pages/4_Analysis.py")],
+        )
         return False
     return True
 

@@ -6,8 +6,8 @@ import pandas as pd
 import streamlit as st
 
 from dsai.app.components import (
-    apply_theme, caveat, dataframe, finding_card, inference, metric_row, page_header,
-    require_run, show_notices, sidebar_chrome, workflow_nav,
+    ai_panel, apply_theme, caveat, chart, dataframe, finding_card, inference, metric_row,
+    page_header, rank_item, require_run, show_notices, sidebar_chrome, workflow_nav,
 )
 from dsai.app.state import workspace
 from dsai.core.schema import EvidenceKind
@@ -45,15 +45,63 @@ order = [
     "Platform interpretation",
     "Your assumptions (not verified)",
 ]
-for heading in order:
-    findings = grouped.get(heading)
-    if not findings:
-        continue
-    st.subheader(heading)
-    if heading.startswith("Your assumptions"):
-        st.caption("These came from you and were not checked against the data. Everything below inherits them.")
-    for index, finding in enumerate(findings):
-        finding_card(finding, expanded=index == 0 and heading != "Your assumptions (not verified)")
+
+ai_panel(
+    f"I found **{len(run.findings)} finding(s)** in this analysis. They are ordered by how strong "
+    "the evidence behind each one is — what was measured first, what a statistical test "
+    "established next, then what a model inferred, then interpretation, then anything you told me "
+    "that I did not check.",
+    heading="AI Analyst · key insights",
+    why="Keeping those apart is the point. A number measured in your data and a conclusion drawn "
+        "from a model are both true statements, but they are not the same kind of true, and acting "
+        "on them carries different risk.",
+)
+
+_EVIDENCE_NOTE = {
+    "Observed in the data": "Counted or computed directly. No model, no test, no inference.",
+    "Established by a statistical test": "A test was run, its assumptions checked, and the effect "
+                                         "size reported alongside the p-value.",
+    "Derived from a model": "What a fitted model relies on. This is association, not cause.",
+    "Platform interpretation": "The platform's reading of the above. Judgement, marked as such.",
+    "Your assumptions (not verified)": "These came from you and were not checked against the data. "
+                                        "Everything above that leans on them inherits them.",
+}
+
+_position = 0
+read_tab, cards_tab = st.tabs(["As a report", "As cards"])
+with read_tab:
+    for heading in order:
+        findings = grouped.get(heading)
+        if not findings:
+            continue
+        st.markdown(f"### {heading}")
+        st.caption(_EVIDENCE_NOTE.get(heading, ""))
+        for finding in findings:
+            _position += 1
+            marks = [(finding.confidence.value, "accent" if finding.confidence.value == "high"
+                      else "neutral")]
+            if finding.caveats:
+                marks.append(("has caveats", "warning"))
+            rank_item(
+                _position, finding.title,
+                body=finding.detail
+                     + ("".join(f"  \n**Evidence.** {e}" for e in finding.evidence[:2]))
+                     + ("".join(f"  \n**Limit.** {c}" for c in finding.caveats[:2])),
+                badges=marks,
+                lead=_position == 1,
+            )
+
+with cards_tab:
+    for heading in order:
+        findings = grouped.get(heading)
+        if not findings:
+            continue
+        st.subheader(heading)
+        if heading.startswith("Your assumptions"):
+            st.caption("These came from you and were not checked against the data. Everything "
+                       "below inherits them.")
+        for index, finding in enumerate(findings):
+            finding_card(finding, expanded=index == 0 and heading != "Your assumptions (not verified)")
 
 st.divider()
 
@@ -70,7 +118,7 @@ if run.segmentation is not None and getattr(run.segmentation, "clusters", None):
                 dataframe(pd.DataFrame(cluster.defining_features))
     figure = plots.cluster_profile(run.segmentation, mode=state.theme)
     if figure is not None:
-        st.plotly_chart(figure, use_container_width=True, key="insight_cluster_profile")
+        chart(figure, key="insight_cluster_profile")
     if run.segmentation.separating_features:
         with st.expander("Which variables separate the segments"):
             dataframe(pd.DataFrame(run.segmentation.separating_features))
@@ -97,12 +145,12 @@ if run.series_analysis:
         figure = plots.forecast_plot(run.best, mode=state.theme,
                                      target_name=run.objective.target or "value")
         if figure is not None:
-            st.plotly_chart(figure, use_container_width=True, key="insight_forecast")
+            chart(figure, key="insight_forecast")
     decomposition = analysis.get("decomposition", {})
     if decomposition.get("supported"):
         figure = plots.decomposition_plot(decomposition, mode=state.theme)
         if figure is not None:
-            st.plotly_chart(figure, use_container_width=True, key="insight_decomposition")
+            chart(figure, key="insight_decomposition")
 
 if run.associations is not None and run.associations.rules:
     st.subheader("Association rules")
@@ -187,7 +235,7 @@ if run.exploration.get("correlations"):
     dataframe(pd.DataFrame(run.exploration["correlations"]).round(4))
     figure = plots.correlation_heatmap(frame, run.profile.numeric_columns, mode=state.theme)
     if figure is not None:
-        st.plotly_chart(figure, use_container_width=True, key="insight_corr")
+        chart(figure, key="insight_corr")
     caveat("Correlation is not causation.")
     st.divider()
 

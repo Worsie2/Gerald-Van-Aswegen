@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from dsai.app.components import (
-    apply_theme, caveat, dataframe, empty_state, inference, metric_row, page_header,
+    apply_theme, caveat, chart, dataframe, empty_state, inference, metric_row, page_header,
     require_data, show_notices, sidebar_chrome,
 )
 from dsai.app.state import workspace
@@ -123,7 +123,7 @@ with compare_tab:
                 )
             figure = plots.box_by_group(frame, value, group, mode=state.theme)
             if figure is not None:
-                st.plotly_chart(figure, use_container_width=True, key="cmp_box")
+                chart(figure, key="cmp_box")
 
 # --------------------------------------------------------------------------
 with relate_tab:
@@ -139,7 +139,7 @@ with relate_tab:
             dataframe(pairs.round(4))
             figure = plots.correlation_heatmap(frame, numeric, mode=state.theme, method=method)
             if figure is not None:
-                st.plotly_chart(figure, use_container_width=True, key="rel_heat")
+                chart(figure, key="rel_heat")
             caveat(
                 "Correlation shows what moves together. It cannot show what causes what — a third "
                 "variable, reverse causation or coincidence all produce the same number."
@@ -154,7 +154,7 @@ with relate_tab:
                 caveat(result.practical_note, label="Practical significance")
                 figure = plots.scatter(frame, first, second, mode=state.theme)
                 if figure is not None:
-                    st.plotly_chart(figure, use_container_width=True, key="rel_scatter")
+                    chart(figure, key="rel_scatter")
 
     if len(categorical) >= 2:
         st.markdown("**Association between categorical variables**")
@@ -194,7 +194,7 @@ with assume_tab:
             caveat(result.practical_note)
         figure = plots.histogram(frame[column], f"Distribution of {column}", mode=state.theme)
         if figure is not None:
-            st.plotly_chart(figure, use_container_width=True, key="assume_hist")
+            chart(figure, key="assume_hist")
 
     if len(numeric) >= 3:
         st.markdown("**Multicollinearity**")

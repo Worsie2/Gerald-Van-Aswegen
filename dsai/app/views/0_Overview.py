@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import streamlit as st
 
-from dsai.app.components import apply_theme, caveat, metric_row, page_header, sidebar_chrome
+import datetime as _dt
+
+from dsai.app.components import (
+    ai_panel, apply_theme, caveat, metric_row, page_header, quality_bars, sidebar_chrome,
+)
+from dsai.app.quality import quality_breakdown
 from dsai.app.state import workspace
 from dsai.preprocessing.steps import STEPS
 from dsai.registry.base import REGISTRY, load_builtin_models
@@ -13,6 +18,98 @@ state = workspace()
 apply_theme(state.theme)
 sidebar_chrome(state)
 load_builtin_models()
+
+# --------------------------------------------------------------------------
+# With a project open this page is a dashboard: the state of the work, and the
+# one thing worth doing next. Without one it is the front door. The same page
+# serving both keeps the app from having a landing screen that goes stale the
+# moment anything is loaded.
+# --------------------------------------------------------------------------
+if state.has_data:
+    profile = state.profile
+    run = state.run
+    hour = _dt.datetime.now().hour
+    greeting = "Good morning" if hour < 12 else "Good afternoon" if hour < 18 else "Good evening"
+
+    page_header(state.dataset_name or "Untitled project", "", greeting)
+
+    figures: list[tuple[str, str, str]] = [
+        ("Rows", f"{profile.n_rows:,}", f"{profile.n_columns} variables"),
+        ("Data quality", f"{profile.quality_score:.0f}/100",
+         f"{len(profile.quality_issues)} issue(s) flagged" if profile.quality_issues
+         else "nothing flagged"),
+    ]
+    if run is not None and run.tournament is not None:
+        figures.append(("Models tested", str(len(run.results)),
+                        f"ranked on {run.plan.primary_metric}" if run.plan else ""))
+        if run.best is not None:
+            figures.append(("Best on this dataset", run.best.model_name,
+                            "under the validation strategy used"))
+    else:
+        figures.append(("Models tested", "—", "no analysis run yet"))
+        figures.append(("Questions found", str(len(state.objectives)),
+                        "detected from the data"))
+    metric_row(figures)
+
+    # What the platform makes of where things stand, and the single next move.
+    if run is None:
+        lead = state.objectives[0] if state.objectives else None
+        ai_panel(
+            f"**{state.dataset_name}** is loaded and profiled. "
+            + (f"The strongest question it can answer is **{lead.label().replace('_', ' ')}**. "
+               if lead else "")
+            + "Nothing has been analysed yet — the plan is shown in full before anything runs.",
+            why=(lead.rationale if lead else ""),
+            evidence=[
+                f"{profile.n_rows:,} rows × {profile.n_columns} columns",
+                f"Data quality {profile.quality_score:.0f}/100",
+            ] + ([f"{len(profile.leakage_suspects)} column(s) may leak the answer"]
+                 if getattr(profile, "leakage_suspects", None) else []),
+            confidence=(lead.confidence if lead else None),
+        )
+        st.page_link("pages/4_Analysis.py", label="Set up the analysis →")
+    else:
+        top = run.findings[0] if run.findings else None
+        action = run.recommendations[0] if run.recommendations else None
+        ai_panel(
+            f"I ran **{len(run.results)} model(s)** and kept **{run.best.model_name}** as the "
+            f"best-performing on this dataset under the validation strategy used"
+            + (f". I found **{len(run.findings)} finding(s)** and **{len(run.recommendations)} "
+               f"recommendation(s)**." if run.findings else ".")
+            if run.best else "The run finished without a usable model.",
+            why=(f"**{top.title}** — {top.detail}" if top else ""),
+            evidence=([action.action] if action else []),
+            confidence=(top.confidence if top else None),
+        )
+        links = st.columns([1, 1, 1, 1, 2])
+        links[0].page_link("pages/5_Models.py", label="The comparison →")
+        links[1].page_link("pages/6_Insights.py", label="Findings →")
+        links[2].page_link("pages/7_Recommendations.py", label="What to do →")
+        links[3].page_link("pages/9_Report.py", label="Report →")
+
+    # Quality, as bars, because a score with no breakdown is not actionable.
+    st.divider()
+    left, right = st.columns([3, 2], gap="large")
+    with left:
+        st.markdown("### Data quality")
+        quality_bars(quality_breakdown(profile))
+        if profile.quality_issues:
+            st.caption(f"{len(profile.quality_issues)} issue(s) — see the **Data** page to work through them.")
+    with right:
+        st.markdown("### Recent activity")
+        if state.runs:
+            for entry in reversed(state.runs[-5:]):
+                st.markdown(
+                    f'<div style="font-size:.8125rem;color:var(--ink-2);padding:.3rem 0;'
+                    f'border-bottom:1px solid var(--border)">'
+                    f'<strong style="color:var(--ink)">{entry.objective.task_type.value.replace("_", " ") if entry.objective else "run"}</strong>'
+                    f' · {len(entry.results)} model(s) · {entry.duration_s:.0f}s</div>',
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.caption("Nothing has run yet. Activity appears here once it has.")
+    st.stop()
+
 
 page_header(
     "An AI data scientist, not a chatbot about one",

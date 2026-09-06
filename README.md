@@ -23,7 +23,7 @@ UPLOAD → UNDERSTAND → CONTEXT → QUALITY → PREPROCESS → CHOOSE METHODS
 | **111 algorithms** | across regression, classification, clustering, dimensionality reduction, time series, anomaly detection and association mining — registered as metadata, not hard-coded |
 | **41 preprocessing steps** | with leakage prevention built into the architecture, not bolted on |
 | **15+ statistical tests** | each reporting assumptions, effect size and whether the difference matters in practice |
-| **6 export formats** | Markdown, HTML, Excel, JSON, runnable Python, PDF |
+| **6 export formats** | Markdown, HTML, Excel, JSON, runnable Python, PDF — all carrying the charts |
 | **3 ways to work** | AI automatic, AI assisted, manual/expert — one engine underneath |
 
 ```bash
@@ -262,18 +262,41 @@ pytest                       # 95 tests
 
 ### Updating to the latest version
 
-From the project folder, with the virtual environment active:
+**Stop the app first** — `Ctrl+C` in its terminal. Streamlit keeps imported modules
+in memory, so a server left running serves the old code no matter how successful
+the pull was. That is the single most common reason an update appears not to work.
+
+Then, from the project folder:
+
+```powershell
+.\scripts\update.ps1      # Windows (PowerShell)
+```
+```bash
+./scripts/update.sh       # macOS / Linux
+```
+
+The script activates `.venv`, stashes local edits if there are any, pulls, reinstalls,
+and finishes by running `dsai doctor`. To do it by hand instead:
 
 ```bash
 git pull origin claude/ai-data-analytics-platform-pc429g
 pip install -e ".[full]"     # only needed when dependencies changed
+dsai app
 ```
 
-Stop the app first (`Ctrl+C` in its terminal) and start it again afterwards —
-Streamlit caches imported modules, so a running server will not pick up new code.
+### When something does not work
 
-If `git pull` refuses because of local edits, either keep them (`git stash`, pull,
-`git stash pop`) or discard them (`git checkout -- .`) before pulling.
+```bash
+dsai doctor      # checks each thing that can break, and prints the exact fix
+dsai version     # which code is actually running, and from where
+```
+
+`dsai doctor` checks the Python version, the virtual environment, whether the install
+is editable (a non-editable install means `git pull` will **not** update the running
+code), every optional package and what each one adds, the Streamlit config, whether
+port 8501 is already serving an older copy, uncommitted local changes, and whether
+static chart export can find a browser. Every failure comes with the command that
+fixes it. It changes nothing itself.
 
 ---
 

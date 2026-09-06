@@ -94,3 +94,24 @@ def messy_frame() -> pd.DataFrame:
     frame["value_leak"] = frame.value * 1.0001
     frame.loc[frame.sample(30, random_state=1).index, "value"] = np.nan
     return pd.concat([frame, frame.head(15)], ignore_index=True)
+
+
+@pytest.fixture(scope="session")
+def regression_run():
+    """One completed regression analysis, plus the typed frame it ran on.
+
+    Session-scoped: it trains real models, and every test that needs a finished
+    run needs the same one.
+    """
+    from dsai.app.samples import build_sample
+    from dsai.core.schema import BusinessContext
+    from dsai.engines.orchestrator import AIDataScientist, RunSettings
+
+    frame, source = build_sample("water_customers")
+    engine = AIDataScientist()
+    run = engine.analyse(
+        frame, "water_customers",
+        BusinessContext(description="water instrumentation customers", currency="ZAR"),
+        RunSettings(max_models=3, time_budget="fast"), source,
+    )
+    return run, engine._typed_frame

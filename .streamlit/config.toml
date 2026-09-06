@@ -1,12 +1,18 @@
 # Streamlit theme, derived from dsai/viz/theme.py.
 # Do not edit these colours here — change them in the theme module, which is the
 # single source of truth shared with the charts, and regenerate.
+#
+# The base stays LIGHT even though the app defaults to dark. Streamlit has no
+# runtime theming API, so whichever mode is not the base has to be reconstructed
+# in CSS — and its own widget internals (select menus, sliders, inputs) are
+# easier to darken than to lighten. Setting the base to dark to save the default
+# an override made every widget in light mode render on a black ground.
 
 [theme]
 base                = "light"
 primaryColor        = "#2a78d6"
-backgroundColor     = "#fcfcfb"
-secondaryBackgroundColor = "#f5f4f1"
+backgroundColor     = "#f9f9f7"
+secondaryBackgroundColor = "#f2f1ee"
 textColor           = "#0b0b0b"
 font                = "sans serif"
 

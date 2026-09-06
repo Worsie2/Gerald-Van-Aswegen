@@ -78,6 +78,13 @@ def main(argv: list[str] | None = None) -> int:
     steps_parser.add_argument("--category")
 
     subparsers.add_parser("app", help="Launch the workspace UI.")
+    subparsers.add_parser(
+        "doctor",
+        help="Check this installation and say exactly what is wrong and how to fix it.",
+    )
+    subparsers.add_parser(
+        "version", help="Print the installed version, where it lives, and the git revision."
+    )
 
     args = parser.parse_args(argv)
     handler = {
@@ -88,6 +95,8 @@ def main(argv: list[str] | None = None) -> int:
         "models": _models,
         "steps": _steps,
         "app": _app,
+        "doctor": _doctor,
+        "version": _version,
     }[args.command]
     try:
         return handler(args)
@@ -231,7 +240,9 @@ def _analyse(args) -> int:
     if args.export:
         from dsai.reporting.exporters import export_all
 
-        written = export_all(run, args.export, args.path)
+        # The frame lets the report draw the relationships in the raw data.
+        written = export_all(run, args.export, args.path,
+                             frame=getattr(scientist, "_typed_frame", None))
         print("\nEXPORTED")
         for label, target in written.items():
             print(f"   {label:18} {target}")
@@ -365,3 +376,42 @@ def _app(args) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _doctor(args) -> int:
+    from dsai.doctor import render, run_checks
+
+    checks = run_checks()
+    print(render(checks))
+    return 1 if any(not c.ok and c.fatal for c in checks) else 0
+
+
+def _version(args) -> int:
+    """Enough to answer "am I running the code I think I am?"."""
+    import platform
+    import subprocess
+    from pathlib import Path
+
+    import dsai
+
+    location = Path(dsai.__file__).resolve().parent
+    print(f"dsai        {getattr(dsai, '__version__', 'unknown')}")
+    print(f"running from {location}")
+    print(f"python      {platform.python_version()} at {sys.executable}")
+    if (location.parent / ".git").exists():
+        try:
+            revision = subprocess.run(
+                ["git", "-C", str(location.parent), "log", "-1", "--format=%h %cd %s",
+                 "--date=short"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout.strip()
+            branch = subprocess.run(
+                ["git", "-C", str(location.parent), "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout.strip()
+            print(f"git         {branch} · {revision}")
+        except Exception:
+            pass
+    else:
+        print("git         not a checkout — this is an installed copy, not a working tree")
+    return 0
