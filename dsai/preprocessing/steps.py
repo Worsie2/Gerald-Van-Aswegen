@@ -666,7 +666,7 @@ def _register_all() -> None:
             category="dimensionality",
             description="Replace correlated numeric columns with a smaller set of components.",
             builder=lambda columns=None, n_components=0.95, **_: T.FrameTransformer(
-                PCA(n_components=n_components, random_state=42), columns, prefix="pc_"
+                T.NamedPCA(n_components=n_components, random_state=42), columns
             ),
             applies_to=NUMERIC,
             leakage_safe=False,

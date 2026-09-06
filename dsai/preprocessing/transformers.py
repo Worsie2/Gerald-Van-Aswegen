@@ -486,6 +486,43 @@ class FrameTransformer(BaseEstimator, TransformerMixin):
         return np.asarray(self.output_names_, dtype=object)
 
 
+class NamedPCA(BaseEstimator, TransformerMixin):
+    """PCA whose output columns are named ``component_1``, ``component_2``, ….
+
+    scikit-learn names them ``pca0``, ``pca1``. Those names end up on feature
+    importance charts and in reports, where "pca0" tells the reader nothing and
+    the zero-indexing invites the question of where component zero went.
+    """
+
+    def __init__(self, n_components: Any = 0.95, random_state: int = 42):
+        self.n_components = n_components
+        self.random_state = random_state
+
+    def fit(self, X, y=None):
+        from sklearn.decomposition import PCA
+
+        self.pca_ = PCA(n_components=self.n_components, random_state=self.random_state)
+        self.pca_.fit(_as_frame(X))
+        self.n_components_ = int(self.pca_.n_components_)
+        self.explained_variance_ratio_ = self.pca_.explained_variance_ratio_
+        return self
+
+    def transform(self, X):
+        values = self.pca_.transform(_as_frame(X))
+        return pd.DataFrame(values, columns=self.get_feature_names_out(),
+                            index=_as_frame(X).index)
+
+    def get_feature_names_out(self, input_features=None):
+        return np.asarray([f"component_{i + 1}" for i in range(self.n_components_)], dtype=object)
+
+    def variance_explained(self) -> dict[str, float]:
+        """How much of the original variation each component carries."""
+        return {
+            f"component_{i + 1}": round(float(v), 4)
+            for i, v in enumerate(self.explained_variance_ratio_)
+        }
+
+
 class NumericCoercer(BaseEstimator, TransformerMixin):
     """Final safety net: force everything numeric and finite before a model sees it.
 

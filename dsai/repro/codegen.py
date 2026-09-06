@@ -216,7 +216,7 @@ def _pipeline_stages(column_steps) -> tuple[set[str], list[str], set[str]]:
                     "PowerTransformer(method='box-cox', standardize=False)"),
         "polynomial_features": ("from sklearn.preprocessing import PolynomialFeatures",
                                 "PolynomialFeatures(degree={degree}, include_bias=False)"),
-        "pca_reduce": ("from sklearn.decomposition import PCA", "PCA(n_components={n_components}, random_state=42)"),
+        "pca_reduce": ("@NamedPCA", "NamedPCA(n_components={n_components})"),
         "log_transform": ("@LogTransformer", "LogTransformer()"),
         "target_encode": ("@TargetEncoder", "TargetEncoder(smoothing={smoothing})"),
         "frequency_encode": ("@FrequencyEncoder", "FrequencyEncoder()"),
