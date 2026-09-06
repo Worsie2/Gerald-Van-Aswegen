@@ -260,6 +260,21 @@ the registry and says so, rather than failing at import.
 pytest                       # 95 tests
 ```
 
+### Updating to the latest version
+
+From the project folder, with the virtual environment active:
+
+```bash
+git pull origin claude/ai-data-analytics-platform-pc429g
+pip install -e ".[full]"     # only needed when dependencies changed
+```
+
+Stop the app first (`Ctrl+C` in its terminal) and start it again afterwards —
+Streamlit caches imported modules, so a running server will not pick up new code.
+
+If `git pull` refuses because of local edits, either keep them (`git stash`, pull,
+`git stash pop`) or discard them (`git checkout -- .`) before pulling.
+
 ---
 
 ## What it will not do
