@@ -25,11 +25,12 @@ import pandas as pd
 
 from dsai.core.profiler import apply_user_overrides, profile_dataset
 from dsai.core.schema import (
-    BusinessContext, Confidence, DatasetProfile, Decision, Finding, JsonMixin, Objective,
-    Recommendation, TaskType, TraceEvent,
+    BusinessContext, Confidence, DatasetProfile, Decision, EvidenceKind, Finding, JsonMixin,
+    Objective, Recommendation, TaskType, TraceEvent,
 )
 from dsai.dataio.loaders import DataSource
 from dsai.engines import metrics as M
+from dsai.engines.metrics import human_number
 from dsai.engines.association import mine_associations
 from dsai.engines.clustering_profile import profile_clusters, suggest_cluster_count
 from dsai.engines.decision import AnalysisPlan, Constraints, plan_analysis
@@ -89,6 +90,14 @@ class AnalysisRun(JsonMixin):
     segmentation: Any = None
     series_analysis: dict[str, Any] = field(default_factory=dict)
     associations: Any = None
+    #: Hypothesis-test outcomes, when the objective was hypothesis testing.
+    tests: list[dict[str, Any]] = field(default_factory=list)
+    #: Descriptive output, when the objective was exploratory.
+    exploration: dict[str, Any] = field(default_factory=dict)
+    #: The k sweep, when the number of segments was not fixed by the user.
+    cluster_sweep: dict[str, Any] = field(default_factory=dict)
+    #: Flagged rows with a reason each, when the objective was anomaly detection.
+    anomalies: list[dict[str, Any]] = field(default_factory=list)
 
     findings: list[Finding] = field(default_factory=list)
     recommendations: list[Recommendation] = field(default_factory=list)
@@ -241,8 +250,17 @@ class AIDataScientist:
 
         if task is TaskType.ASSOCIATION_RULES:
             return self._execute_association(run)
+        if task is TaskType.HYPOTHESIS_TESTING:
+            return self._execute_hypothesis_tests(run)
+        if task is TaskType.EXPLORATORY:
+            return self._execute_exploratory(run)
+        if task is TaskType.DIMENSIONALITY_REDUCTION:
+            return self._execute_dimensionality(run)
         if task is TaskType.TIME_SERIES_FORECAST:
             self._prepare_series(run)
+
+        if task is TaskType.CLUSTERING and not run.objective.n_clusters:
+            self._suggest_cluster_count(run)
 
         pipelines = self._build_pipelines(run)
         model_keys = run.plan.model_keys()
@@ -284,6 +302,8 @@ class AIDataScientist:
 
         if task is TaskType.CLUSTERING and run.best is not None:
             self._profile_segments(run)
+        if task is TaskType.ANOMALY_DETECTION and run.best is not None:
+            self._profile_anomalies(run)
         if run.settings.explain and run.best is not None and task.is_supervised and task is not TaskType.TIME_SERIES_FORECAST:
             self._explain(run, engine)
         return run
@@ -305,11 +325,17 @@ class AIDataScientist:
             )
 
         with run.trace.start("Generating findings") as step:
-            run.findings = generate_insights(
+            # Anything the execution stage already established — hypothesis
+            # tests, association rules, variance retained — is kept and the
+            # profile-level findings are added to it.
+            established = list(run.findings)
+            generated = generate_insights(
                 run.profile, run.objective, run.context, self._typed_frame,
                 run.best, run.explanation, run.tournament, run.diagnostics,
                 run.segmentation, run.series_analysis,
             )
+            seen = {f.title for f in established}
+            run.findings = established + [f for f in generated if f.title not in seen]
             step.update(f"{len(run.findings)} finding(s)")
 
         with run.trace.start("Generating recommendations") as step:
@@ -404,6 +430,110 @@ class AIDataScientist:
         if period:
             run.objective.extras["seasonal_period"] = period
 
+    def _suggest_cluster_count(self, run: AnalysisRun) -> None:
+        """Sweep k and record how many internal measures agree on the answer.
+
+        No single measure settles the number of clusters. Agreement between four
+        of them is a real signal; disagreement means the data has no sharp
+        structure and the choice belongs to the user, not to a metric.
+        """
+        from sklearn.preprocessing import StandardScaler
+
+        features = [c for c in (run.objective.features or run.profile.modelling_columns)
+                    if c in run.profile.numeric_columns]
+        if len(features) < 2:
+            return
+        matrix = self._typed_frame[features].apply(pd.to_numeric, errors="coerce").dropna()
+        if len(matrix) < 20:
+            return
+
+        with run.trace.start("Choosing the number of segments") as step:
+            scaled = StandardScaler().fit_transform(matrix)
+            run.cluster_sweep = suggest_cluster_count(scaled)
+            if run.cluster_sweep.get("supported"):
+                k = run.cluster_sweep["recommended_k"]
+                run.objective.n_clusters = k
+                step.update(f"k = {k} ({run.cluster_sweep['agreement']} agree)")
+                run.decisions.append(
+                    Decision(
+                        stage="clustering",
+                        decision=f"Use {k} segments",
+                        reason=run.cluster_sweep["interpretation"],
+                        evidence=[
+                            f"Elbow: {run.cluster_sweep['elbow_k']}",
+                            f"Best silhouette: {run.cluster_sweep['best_silhouette_k']}",
+                            f"Best Calinski-Harabasz: {run.cluster_sweep['best_calinski_k']}",
+                            f"Best Davies-Bouldin: {run.cluster_sweep['best_davies_bouldin_k']}",
+                        ],
+                        confidence={
+                            "high": Confidence.HIGH, "moderate": Confidence.MODERATE,
+                        }.get(run.cluster_sweep["confidence"], Confidence.LOW),
+                    )
+                )
+            else:
+                step.update("could not sweep")
+
+    def _profile_anomalies(self, run: AnalysisRun) -> None:
+        """Turn anomaly flags into rows a person can review, with a reason each."""
+        best = run.best
+        flags = best.extras.get("flags")
+        index = best.extras.get("row_index")
+        if not flags or index is None:
+            return
+
+        with run.trace.start("Explaining the flagged rows") as step:
+            frame = self._typed_frame.loc[index]
+            scores = best.extras.get("scores")
+            flagged = [i for i, f in enumerate(flags) if f == -1]
+            if scores:
+                flagged.sort(key=lambda i: scores[i])
+            numeric = [c for c in best.features if c in frame.columns
+                       and c in run.profile.numeric_columns]
+            means = frame[numeric].mean() if numeric else None
+            spread = frame[numeric].std(ddof=0).replace(0, 1.0) if numeric else None
+
+            rows = []
+            for position in flagged[:200]:
+                row = frame.iloc[position]
+                reasons = []
+                if numeric:
+                    deviation = ((row[numeric] - means) / spread).astype(float)
+                    for column in deviation.abs().sort_values(ascending=False).head(3).index:
+                        value = float(deviation[column])
+                        if abs(value) < 1.5:
+                            continue
+                        reasons.append(
+                            f"{column} is {abs(value):.1f} SD "
+                            f"{'above' if value > 0 else 'below'} average "
+                            f"({human_number(row[column])} vs {human_number(means[column])})"
+                        )
+                rows.append({
+                    "row": index[position],
+                    "score": round(float(scores[position]), 4) if scores else None,
+                    "why": "; ".join(reasons) or "unusual in combination rather than on any one variable",
+                })
+            run.anomalies = rows
+            step.update(f"{len(rows)} row(s) described")
+
+        if rows:
+            run.findings.append(
+                Finding(
+                    title=f"{int(best.test_scores.get('n_anomalies', 0))} row(s) look unlike the rest",
+                    detail=(
+                        f"{best.test_scores.get('anomaly_rate', 0):.1%} of rows were flagged by "
+                        f"{best.model_name}. Unusual is not the same as wrong — these are the rows "
+                        "worth a human looking at, not rows to delete."
+                    ),
+                    kind=EvidenceKind.MODEL,
+                    evidence=[r["why"] for r in rows[:4]],
+                    confidence=Confidence.MODERATE,
+                    caveats=[
+                        "There are no labels here, so 'anomalous' means 'unlike the rest of this "
+                        "data'. Whether a flagged row is actually a problem is your judgement.",
+                    ],
+                )
+            )
+
     def _profile_segments(self, run: AnalysisRun) -> None:
         labels = run.best.extras.get("labels")
         index = run.best.extras.get("row_index")
@@ -468,6 +598,310 @@ class AIDataScientist:
                 )
         for issue in run.diagnostics.get("issues", []):
             run.trace.add(issue[:160], status="warning")
+
+    def _execute_dimensionality(self, run: AnalysisRun) -> AnalysisRun:
+        """Project the numeric columns down and report what each component carries.
+
+        Unlike the supervised path there is no held-out score to compare against;
+        the useful questions are how much variance survives and what the
+        components are made of.
+        """
+        from sklearn.preprocessing import StandardScaler
+
+        objective = run.objective
+        features = [c for c in (objective.features or run.profile.numeric_columns)
+                    if c in self._typed_frame.columns]
+        features = [c for c in features if c in run.profile.numeric_columns]
+        if len(features) < 2:
+            run.warnings.append(
+                "Dimensionality reduction needs at least two numeric variables; "
+                f"{len(features)} were available."
+            )
+            run.trace.add("Not enough numeric variables to reduce", status="failed")
+            return run
+
+        matrix = self._typed_frame[features].apply(pd.to_numeric, errors="coerce").dropna()
+        with run.trace.start(f"Reducing {len(features)} numeric variable(s)") as step:
+            scaled = StandardScaler().fit_transform(matrix)
+            results = []
+            for key in run.plan.model_keys():
+                try:
+                    spec = self.registry.get(key)
+                except KeyError:
+                    continue
+                result = ExperimentResult(
+                    model_key=key, model_name=spec.name, task_type=TaskType.DIMENSIONALITY_REDUCTION,
+                    features=features, n_train=len(matrix),
+                    interpretability=spec.interpretability.value, cost=spec.cost.value,
+                    family=spec.family, random_seed=run.settings.random_state,
+                )
+                started = time.perf_counter()
+                try:
+                    reducer = spec.build(n_components=min(2, len(features)))
+                    projected = reducer.fit_transform(scaled)
+                    result.extras["projection"] = np.asarray(projected)[:5000].tolist()
+                    result.extras["row_index"] = list(matrix.index[:5000])
+                    result.n_features_out = int(np.asarray(projected).shape[1])
+                    ratio = getattr(reducer, "explained_variance_ratio_", None)
+                    if ratio is not None:
+                        result.test_scores["explained_variance_ratio"] = float(np.sum(ratio))
+                        result.extras["per_component"] = [float(v) for v in ratio]
+                    loadings = getattr(reducer, "components_", None)
+                    if loadings is not None:
+                        result.extras["loadings"] = {
+                            f"component_{i + 1}": {
+                                features[j]: round(float(loadings[i][j]), 4)
+                                for j in range(min(len(features), loadings.shape[1]))
+                            }
+                            for i in range(min(len(loadings), 4))
+                        }
+                    result.hyperparameters = spec.default_params()
+                except Exception as exc:
+                    result.status = "failed"
+                    result.error = f"{type(exc).__name__}: {exc}"
+                result.training_time_s = round(time.perf_counter() - started, 4)
+                results.append(result)
+                run.trace.add(
+                    f"  {spec.name}: "
+                    + (f"{result.test_scores.get('explained_variance_ratio', float('nan')):.1%} "
+                       "of variance retained" if result.status == "success" else result.error[:90]),
+                    status="done" if result.status == "success" else "failed",
+                )
+            run.results = results
+            step.update(f"{sum(1 for r in results if r.status == 'success')}/{len(results)} succeeded")
+
+        succeeded = [r for r in results if r.status == "success"]
+        if succeeded:
+            # Prefer a method that can report how much variance it kept; a
+            # projection you cannot quantify is harder to justify.
+            run.best = max(
+                succeeded,
+                key=lambda r: (
+                    "explained_variance_ratio" in r.test_scores,
+                    r.test_scores.get("explained_variance_ratio", 0.0),
+                ),
+            )
+            retained = run.best.test_scores.get("explained_variance_ratio")
+            if retained is None:
+                run.findings.append(
+                    Finding(
+                        title=f"{run.best.model_name} projected {len(features)} variables to "
+                              f"{run.best.n_features_out} dimensions",
+                        detail=(
+                            "This method does not report how much of the original variation it "
+                            "kept, because it optimises local neighbourhood structure rather than "
+                            "variance. Use the projection to look for grouping; do not read "
+                            "distances, cluster sizes or axis values off it, and do not feed it "
+                            "into a model as if it were a faithful summary."
+                        ),
+                        kind=EvidenceKind.MODEL,
+                        evidence=[f"{run.best.model_name}",
+                                  f"{len(features)} variables → {run.best.n_features_out} dimensions"],
+                        columns=features,
+                        confidence=Confidence.MODERATE,
+                        caveats=[
+                            "Manifold projections are for visualisation. A different random seed "
+                            "or parameter setting produces a different picture of the same data.",
+                        ],
+                    )
+                )
+            if retained is not None:
+                run.findings.append(
+                    Finding(
+                        title=f"{run.best.n_features_out} component(s) retain "
+                              f"{retained:.0%} of the variation in {len(features)} variables",
+                        detail=(
+                            "The components are blends of the original variables, so this buys "
+                            "a compact representation at the cost of being able to name what drives "
+                            "what. Use it to handle collinearity or to visualise structure, not to "
+                            "explain the outcome."
+                        ),
+                        kind=EvidenceKind.MODEL,
+                        evidence=[f"{run.best.model_name}"] + [
+                            f"component_{i + 1}: {v:.1%}"
+                            for i, v in enumerate(run.best.extras.get("per_component", [])[:4])
+                        ],
+                        columns=features,
+                        confidence=Confidence.HIGH,
+                    )
+                )
+        return run
+
+    def _execute_hypothesis_tests(self, run: AnalysisRun) -> AnalysisRun:
+        """Compare a numeric measure across the levels of each categorical variable.
+
+        Assumptions are checked first, the non-parametric equivalent is run as a
+        cross-check, and the p-values are corrected for the number of tests —
+        without which twenty comparisons at 0.05 produce a false positive about
+        two-thirds of the time.
+        """
+        from dsai.statistics import tests as T
+
+        objective = run.objective
+        frame = self._typed_frame
+        value = objective.target or (run.profile.numeric_columns[0]
+                                     if run.profile.numeric_columns else None)
+        if value is None:
+            run.warnings.append("Hypothesis testing needs a numeric measure to compare.")
+            run.trace.add("No numeric variable to test", status="failed")
+            return run
+
+        groups = [
+            c for c in (objective.features or run.profile.categorical_columns)
+            if c in run.profile.columns
+            and run.profile.columns[c].is_categorical
+            and 2 <= run.profile.columns[c].n_unique <= 20
+        ]
+        if not groups:
+            run.warnings.append(
+                "No categorical variable with between 2 and 20 levels was available to group by."
+            )
+            run.trace.add("No grouping variable available", status="failed")
+            return run
+
+        outcomes = []
+        with run.trace.start(f"Comparing '{value}' across {len(groups)} grouping variable(s)") as step:
+            for column in groups:
+                n_levels = int(frame[column].nunique())
+                if n_levels == 2:
+                    levels = list(frame[column].dropna().unique())[:2]
+                    a = frame.loc[frame[column] == levels[0], value]
+                    b = frame.loc[frame[column] == levels[1], value]
+                    primary = T.t_test(a, b, names=(str(levels[0]), str(levels[1])))
+                    secondary = T.mann_whitney(a, b, names=(str(levels[0]), str(levels[1])))
+                else:
+                    primary = T.anova(frame, value, column)
+                    secondary = T.kruskal_wallis(frame, value, column)
+                outcomes.append({"group": column, "primary": primary, "secondary": secondary})
+                run.trace.add(
+                    f"  {value} by {column}: p = {primary.p_value:.4g}"
+                    + (" (significant)" if primary.significant else ""),
+                )
+            step.update(f"{len(outcomes)} comparison(s)")
+
+        correction = T.multiple_comparison_correction(
+            [o["primary"].p_value for o in outcomes], method="holm"
+        )
+        for outcome, adjusted, still in zip(outcomes, correction["adjusted"], correction["significant"]):
+            outcome["adjusted_p"] = adjusted
+            outcome["significant_after_correction"] = still
+        run.tests = outcomes
+
+        for outcome in outcomes:
+            primary, secondary = outcome["primary"], outcome["secondary"]
+            agrees = primary.significant == secondary.significant
+            run.findings.append(
+                Finding(
+                    title=(
+                        f"'{value}' differs across '{outcome['group']}'"
+                        if outcome["significant_after_correction"]
+                        else f"No reliable difference in '{value}' across '{outcome['group']}'"
+                    ),
+                    detail=primary.conclusion + " " + primary.practical_note,
+                    kind=EvidenceKind.STATISTICAL,
+                    evidence=[
+                        f"{primary.test}: statistic {primary.statistic:.4f}, p = {primary.p_value:.4g}",
+                        f"Adjusted for {correction['n_tests']} comparison(s): p = {outcome['adjusted_p']:.4g}",
+                        f"Effect size ({primary.effect_size_name}) = {primary.effect_size:.3f} "
+                        f"— {primary.effect_interpretation}",
+                        f"Non-parametric cross-check ({secondary.test}) "
+                        + ("agrees" if agrees else "disagrees"),
+                    ],
+                    columns=[value, outcome["group"]],
+                    confidence=(
+                        Confidence.HIGH if outcome["significant_after_correction"] and agrees
+                        else Confidence.MODERATE if agrees else Confidence.LOW
+                    ),
+                    caveats=(primary.assumption_warnings or [])
+                    + ([] if agrees else [
+                        "The parametric and non-parametric tests disagree, which usually means an "
+                        "assumption is violated. Trust the non-parametric result."
+                    ]),
+                )
+            )
+        if correction["n_tests"] > 1:
+            run.warnings.append(correction["note"])
+        return run
+
+    def _execute_exploratory(self, run: AnalysisRun) -> AnalysisRun:
+        """Describe the data and the relationships in it, without fitting a model."""
+        from dsai.statistics.descriptive import correlation_pairs, outlier_table
+
+        frame = self._typed_frame
+        with run.trace.start("Describing distributions and relationships") as step:
+            numeric = run.profile.numeric_columns
+            pairs = correlation_pairs(frame, columns=numeric, min_abs=0.25) if len(numeric) >= 2 \
+                else pd.DataFrame()
+            outliers = outlier_table(frame, numeric) if numeric else pd.DataFrame()
+            run.exploration = {
+                "correlations": pairs.head(25).to_dict("records") if not pairs.empty else [],
+                "outliers": outliers.to_dict("records") if not outliers.empty else [],
+            }
+            step.update(
+                f"{len(run.exploration['correlations'])} notable relationship(s)"
+            )
+
+        if len(numeric) >= 2 and not run.exploration["correlations"]:
+            run.findings.append(
+                Finding(
+                    title="No numeric variables move together to any useful degree",
+                    detail=(
+                        f"Across {len(numeric)} numeric variable(s), no pair correlates above 0.25. "
+                        "They carry largely independent information, which is good for modelling — "
+                        "there is little redundancy — but it also means no single numeric variable "
+                        "stands in for another. If you expected a relationship here, it may be "
+                        "nonlinear, or it may run through a categorical variable instead."
+                    ),
+                    kind=EvidenceKind.STATISTICAL,
+                    evidence=[f"{len(numeric)} numeric variables tested pairwise",
+                              "Strongest absolute correlation below 0.25"],
+                    columns=numeric,
+                    confidence=Confidence.HIGH,
+                )
+            )
+
+        heavy = [r for r in run.exploration["outliers"] if r.get("pct_outliers", 0) >= 5][:3]
+        for row in heavy:
+            run.findings.append(
+                Finding(
+                    title=f"'{row['variable']}' has a long tail",
+                    detail=(
+                        f"{row['n_outliers']} value(s) — {row['pct_outliers']:.1f}% — sit outside "
+                        f"the {human_number(row['lower_bound'])} to {human_number(row['upper_bound'])} range that the "
+                        "interquartile fences mark as typical. That is normal for money and counts, "
+                        "but it means the average is not a typical value."
+                    ),
+                    kind=EvidenceKind.OBSERVED,
+                    evidence=[
+                        f"Largest value: {human_number(row['max_outlier'])}",
+                        f"Typical range: {human_number(row['lower_bound'])} to {human_number(row['upper_bound'])}",
+                    ],
+                    columns=[row["variable"]],
+                    confidence=Confidence.HIGH,
+                )
+            )
+
+        for row in run.exploration["correlations"][:5]:
+            run.findings.append(
+                Finding(
+                    title=f"'{row['variable_1']}' and '{row['variable_2']}' move together",
+                    detail=(
+                        f"{row['strength'].capitalize()} relationship (r = {row['coefficient']:.3f}) "
+                        f"across {row['n']:,} rows. They share "
+                        f"{row['coefficient'] ** 2:.0%} of their variation."
+                    ),
+                    kind=EvidenceKind.STATISTICAL,
+                    evidence=[
+                        f"Pearson r = {row['coefficient']:.4f}",
+                        f"p = {row.get('p_value', float('nan')):.4g}",
+                        f"n = {row['n']:,}",
+                    ],
+                    columns=[row["variable_1"], row["variable_2"]],
+                    confidence=Confidence.HIGH if row.get("significant_at_5pct") else Confidence.LOW,
+                    caveats=["Correlation is not causation."],
+                )
+            )
+        return run
 
     def _execute_association(self, run: AnalysisRun) -> AnalysisRun:
         extras = run.objective.extras

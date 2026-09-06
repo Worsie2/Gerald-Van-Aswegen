@@ -10,7 +10,6 @@ from dsai.app.components import (
 from dsai.app.state import workspace
 from dsai.engines.recommend import group_by_category
 
-st.set_page_config(page_title="Recommendations · DSAI", page_icon="✅", layout="wide")
 state = workspace()
 apply_theme(state.theme)
 sidebar_chrome(state)

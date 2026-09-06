@@ -17,6 +17,7 @@ import pandas as pd
 
 from dsai.core.schema import Confidence, EvidenceKind, Finding, Recommendation, TaskType
 from dsai.engines import metrics as M
+from dsai.engines.metrics import human_number
 from dsai.engines.insight import group_by_evidence
 from dsai.engines.recommend import group_by_category
 
@@ -497,7 +498,7 @@ def _drivers_section(run: Any) -> str:
     ]
     for feature in explanation.importances[:15]:
         lines.append(
-            f"| {feature.rank} | `{feature.feature}` | {feature.importance:,.4g} | "
+            f"| {feature.rank} | `{feature.feature}` | {human_number(feature.importance)} | "
             f"{feature.direction or '—'} |"
         )
     if explanation.plain_english:
@@ -513,9 +514,9 @@ def _drivers_section(run: Any) -> str:
         ]
         for row in significant[:15]:
             lines.append(
-                f"| `{row['term']}` | {row['coefficient']:,.4g} | {row.get('std_error', float('nan')):,.4g} | "
-                f"{row['p_value']:.4f} | {row.get('ci_lower', float('nan')):,.4g} to "
-                f"{row.get('ci_upper', float('nan')):,.4g} |"
+                f"| `{row['term']}` | {human_number(row['coefficient'])} | {human_number(row.get('std_error', float('nan')))} | "
+                f"{row['p_value']:.4f} | {human_number(row.get('ci_lower', float('nan')))} to "
+                f"{human_number(row.get('ci_upper', float('nan')))} |"
             )
     if explanation.caveats:
         lines += ["", "**Caveats**", ""]

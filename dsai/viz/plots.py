@@ -757,3 +757,170 @@ def render(spec: Any, frame: pd.DataFrame, run: Any = None, mode: str = "light")
     except Exception:
         return None
     return None
+
+
+# --------------------------------------------------------------------------
+# before / after — what a preprocessing pipeline actually did
+# --------------------------------------------------------------------------
+
+def correlation_comparison(
+    before: pd.DataFrame,
+    after: pd.DataFrame,
+    title: str = "Correlation before and after preprocessing",
+    mode: str = "light",
+    max_columns: int = 18,
+):
+    """Two heatmaps side by side, on one shared colour scale.
+
+    A shared scale is the whole point: separate scales would make an unchanged
+    matrix look transformed. Reducing collinearity is usually why a pipeline
+    exists, and this is the only honest way to see whether it worked.
+    """
+    from plotly.subplots import make_subplots
+
+    left = before.select_dtypes(include="number")
+    right = after.select_dtypes(include="number")
+    if left.shape[1] < 2 or right.shape[1] < 2:
+        return None
+    left = left.iloc[:, :max_columns]
+    right = right.iloc[:, :max_columns]
+
+    text = ink(mode)
+    scale = [[i / (len(diverging(mode)) - 1), c] for i, c in enumerate(diverging(mode))]
+    figure = make_subplots(
+        rows=1, cols=2, horizontal_spacing=0.13,
+        subplot_titles=(f"Before — {left.shape[1]} variables", f"After — {right.shape[1]} variables"),
+    )
+    for column, frame in ((1, left), (2, right)):
+        matrix = frame.corr()
+        figure.add_trace(
+            _go().Heatmap(
+                z=matrix.to_numpy(), x=list(matrix.columns), y=list(matrix.columns),
+                colorscale=scale, zmid=0, zmin=-1, zmax=1,
+                showscale=column == 2,
+                colorbar={"title": {"text": "r", "font": {"size": 11}}, "thickness": 11, "len": 0.75},
+                hovertemplate="%{y} vs %{x}<br>r = %{z:.3f}<extra></extra>",
+            ),
+            row=1, col=column,
+        )
+    height = max(380, 22 * max(left.shape[1], right.shape[1]) + 190)
+    figure.update_layout(**layout(title, mode, height=height, showlegend=False))
+    figure.update_xaxes(tickangle=-45, showgrid=False, tickfont={"size": 9, "color": text["text_muted"]})
+    figure.update_yaxes(autorange="reversed", showgrid=False,
+                        tickfont={"size": 9, "color": text["text_muted"]})
+    for annotation in figure.layout.annotations:
+        annotation.font.update(size=11, color=text["text_secondary"])
+    return figure
+
+
+def distribution_comparison(
+    before: pd.Series,
+    after: pd.Series,
+    title: str = "",
+    mode: str = "light",
+    bins: int = 40,
+):
+    """One column before and after a transform, on separate panels.
+
+    Deliberately not overlaid on one axis: a log or scaling step changes the
+    units, and drawing two different scales on one axis would misrepresent both.
+    """
+    from plotly.subplots import make_subplots
+
+    left = pd.to_numeric(before, errors="coerce").dropna()
+    right = pd.to_numeric(after, errors="coerce").dropna()
+    if left.empty or right.empty:
+        return None
+
+    colours, text = palette(mode), ink(mode)
+    figure = make_subplots(
+        rows=1, cols=2, horizontal_spacing=0.1,
+        subplot_titles=(
+            f"Before — skew {left.skew():.2f}",
+            f"After — skew {right.skew():.2f}",
+        ),
+    )
+    for column, (values, colour) in enumerate(((left, text["text_secondary"]), (right, colours[0])), start=1):
+        figure.add_trace(
+            _go().Histogram(
+                x=values, nbinsx=bins, marker={"color": colour, "line": {"width": 0}},
+                opacity=0.9, hovertemplate="%{x}<br>%{y} rows<extra></extra>",
+            ),
+            row=1, col=column,
+        )
+        figure.add_vline(
+            x=float(values.median()), row=1, col=column,
+            line={"color": text["text_primary"], "width": LINE_WIDTH, "dash": "dot"},
+        )
+    figure.update_layout(**layout(title or f"{before.name}: before and after", mode,
+                                  height=340, showlegend=False), bargap=0.04)
+    figure.update_yaxes(title_text="rows", row=1, col=1)
+    for annotation in figure.layout.annotations:
+        annotation.font.update(size=11, color=text["text_secondary"])
+    return figure
+
+
+def vif_comparison(before: dict[str, float], after: dict[str, float],
+                   title: str = "Multicollinearity before and after", mode: str = "light",
+                   top_n: int = 12):
+    """VIF per variable, before against after, with the danger thresholds marked."""
+    if not before:
+        return None
+    ranked = sorted(before.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+    names = [n for n, _ in ranked][::-1]
+    before_values = [min(v, 100) for _, v in ranked][::-1]
+    after_values = [min(after.get(n, 0.0), 100) for n in names]
+
+    colours, text = palette(mode), ink(mode)
+    figure = _fig(mode, title, height=max(320, 30 * len(names) + 140))
+    for values, label, colour in (
+        (before_values, "before", text["axis"]),
+        (after_values, "after", colours[0]),
+    ):
+        figure.add_trace(
+            _go().Bar(
+                x=values, y=names, orientation="h", name=label,
+                marker={"color": colour, "line": {"width": 0}},
+                hovertemplate=f"{label}<br>%{{y}}: VIF %{{x:.1f}}<extra></extra>",
+            )
+        )
+    for threshold, note in ((5, "caution"), (10, "severe")):
+        figure.add_vline(
+            x=threshold, line={"color": text["text_muted"], "width": 1, "dash": "dot"},
+            annotation_text=note, annotation_position="top",
+            annotation_font={"color": text["text_muted"], "size": 10},
+        )
+    figure.update_layout(
+        barmode="group", bargap=0.25, bargroupgap=0.08, showlegend=True,
+        xaxis_title="variance inflation factor (capped at 100)",
+        yaxis={"autorange": "reversed"},
+        margin={"l": 190, "r": 40, "t": 70, "b": 52},
+    )
+    return figure
+
+
+def pipeline_shape(stages: list[dict[str, Any]], title: str = "Columns through the pipeline",
+                   mode: str = "light"):
+    """How the column count moves at each step — where width is added or removed."""
+    labelled = [s for s in stages if s.get("columns_after") is not None]
+    if len(labelled) < 2:
+        return None
+    labels = [s["step"].split("→")[0].strip()[:28] for s in labelled]
+    counts = [s["columns_after"] for s in labelled]
+    colours = palette(mode)
+    figure = _fig(mode, title, height=340)
+    figure.add_trace(
+        _go().Scatter(
+            x=list(range(len(counts))), y=counts, mode="lines+markers",
+            line={"color": colours[0], "width": LINE_WIDTH},
+            marker={"size": MARKER_SIZE, "line": {"width": 1, "color": ink(mode)["surface"]}},
+            customdata=labels, hovertemplate="%{customdata}<br>%{y} columns<extra></extra>",
+            name="columns",
+        )
+    )
+    figure.update_layout(
+        xaxis={"tickmode": "array", "tickvals": list(range(len(labels))),
+               "ticktext": labels, "tickangle": -32},
+        yaxis_title="columns", margin={"l": 60, "r": 24, "t": 52, "b": 130},
+    )
+    return figure

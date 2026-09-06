@@ -14,7 +14,6 @@ from dsai.reporting.builder import build_report
 from dsai.reporting.exporters import to_excel, to_html, to_json, to_markdown, to_python
 from dsai.repro.provenance import build_manifest
 
-st.set_page_config(page_title="Report · DSAI", page_icon="📑", layout="wide")
 state = workspace()
 apply_theme(state.theme)
 sidebar_chrome(state)

@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import streamlit as st
 
+import pandas as pd
+
 from dsai.app.components import (
-    apply_theme, caveat, sidebar_chrome, inference, dataframe, decision_panel, override_notice, page_header, require_data, show_notices, workflow_nav,
+    apply_theme, caveat, dataframe, decision_panel, empty_state, inference, metric_row,
+    override_notice, page_header, require_data, show_notices, sidebar_chrome, workflow_nav,
 )
+from dsai.viz import plots
 from dsai.app.state import workspace
 from dsai.core.schema import TaskType
 from dsai.preprocessing.pipeline import PreprocessingPipeline
@@ -14,7 +18,6 @@ from dsai.preprocessing.recommender import recommend_pipeline
 from dsai.preprocessing.steps import STEPS
 from dsai.registry.base import REGISTRY
 
-st.set_page_config(page_title="Preprocessing · DSAI", page_icon="🧹", layout="wide")
 state = workspace()
 apply_theme(state.theme)
 sidebar_chrome(state)
@@ -40,8 +43,34 @@ if objective is None:
     st.info("No analytical objective is set. Choose one on the **Analysis** page first.")
     st.stop()
 
-build_tab, edit_tab, preview_tab, saved_tab = st.tabs(
-    ["Build", "Edit steps", "Preview effect", "Saved pipelines"]
+# A pipeline switcher above the tabs: several can be held at once and compared.
+switch, new, delete = st.columns([3, 1, 1])
+names = state.pipeline_names
+if names:
+    chosen = switch.selectbox(
+        "Working on", names,
+        index=names.index(state.active_pipeline) if state.active_pipeline in names else 0,
+        help="Several pipelines can be held at once. The active one is used by the Analysis page.",
+    )
+    if chosen != state.active_pipeline:
+        state.active_pipeline = chosen
+        st.rerun()
+else:
+    switch.caption("No pipeline yet — build one below.")
+
+new.write("")
+if new.button("Duplicate", disabled=state.pipeline is None, use_container_width=True,
+              help="Copy the active pipeline so you can try a variation without losing this one."):
+    state.add_pipeline(f"{state.active_pipeline} copy", state.pipeline.copy())
+    state.notify("success", f"Duplicated as '{state.active_pipeline}'.")
+    st.rerun()
+delete.write("")
+if delete.button("Delete", disabled=len(names) < 2, use_container_width=True):
+    state.remove_pipeline(state.active_pipeline)
+    st.rerun()
+
+build_tab, edit_tab, preview_tab, effect_tab, compare_tab, saved_tab = st.tabs(
+    ["Build", "Edit steps", "Preview effect", "What it changed", "Compare pipelines", "Saved pipelines"]
 )
 
 with build_tab:
@@ -65,13 +94,14 @@ with build_tab:
             profile, objective.task_type, objective.target, spec, state.context,
             aggressiveness=aggressiveness,
         )
-        state.pipeline = pipeline
-        state.notify("success", f"Built a {len(pipeline.active_steps)}-step pipeline.")
+        label = "general purpose" if model_choice.startswith("—") else REGISTRY.get(model_choice).name
+        name = state.add_pipeline(f"{label} · {aggressiveness}", pipeline)
+        state.notify("success", f"Built '{name}' — {len(pipeline.active_steps)} step(s).")
         st.session_state["_preprocessing_decisions"] = decisions
         st.rerun()
 
     if st.button("Start from an empty pipeline"):
-        state.pipeline = PreprocessingPipeline(name="manual")
+        state.add_pipeline("manual", PreprocessingPipeline(name="manual"))
         st.session_state["_preprocessing_decisions"] = []
         st.rerun()
 
@@ -204,6 +234,128 @@ with preview_tab:
         for name in report["applied_before_split"] or ["(none)"]:
             columns[1].markdown(f"- {name}")
 
+with effect_tab:
+    if pipeline is None or not pipeline.active_steps:
+        empty_state("Nothing to compare yet", "Build a pipeline first.")
+    else:
+        st.caption(
+            "The same rows before and after the pipeline. Reducing collinearity is usually why a "
+            "pipeline exists, so this is where you check whether it actually did."
+        )
+        target_series = frame[objective.target] if objective.target in frame.columns else None
+        features = frame.drop(columns=[objective.target], errors="ignore")
+        try:
+            rows, _ = pipeline.apply_row_steps(features)
+            aligned = target_series.loc[rows.index] if target_series is not None else None
+            transformed = pipeline.build_sklearn_pipeline().fit_transform(rows, aligned)
+        except Exception as exc:
+            transformed = None
+            st.error(f"The pipeline could not be applied: {exc}")
+
+        if transformed is not None:
+            before_numeric = rows.select_dtypes(include="number")
+            metric_row([
+                ("Rows", f"{len(rows):,}", f"was {len(features):,}"),
+                ("Columns", f"{transformed.shape[1]}", f"was {features.shape[1]}"),
+                ("Numeric columns", f"{transformed.select_dtypes(include='number').shape[1]}",
+                 f"was {before_numeric.shape[1]}"),
+                ("Missing cells", f"{int(transformed.isna().sum().sum()):,}",
+                 f"was {int(features.isna().sum().sum()):,}"),
+            ])
+
+            figure = plots.correlation_comparison(rows, transformed, mode=state.theme)
+            if figure is not None:
+                st.plotly_chart(figure, use_container_width=True, key="prep_corr")
+                caveat(
+                    "Correlation is computed on the columns as they stand at each point. After "
+                    "one-hot encoding the 'after' matrix has more, narrower columns, so compare "
+                    "the pattern rather than counting cells.",
+                )
+            else:
+                caveat("Too few numeric columns on one side to compare correlation.")
+
+            before_vif = {k: v for k, v in profile.multicollinearity.items()
+                          if k in before_numeric.columns}
+            if before_vif:
+                from dsai.statistics.descriptive import variance_inflation_factors
+
+                after_table = variance_inflation_factors(transformed)
+                after_vif = dict(zip(after_table["variable"], after_table["vif"])) \
+                    if not after_table.empty else {}
+                figure = plots.vif_comparison(before_vif, after_vif, mode=state.theme)
+                if figure is not None:
+                    st.plotly_chart(figure, use_container_width=True, key="prep_vif")
+
+            st.markdown("**One variable, before and after**")
+            shared = [c for c in before_numeric.columns if c in transformed.columns]
+            if shared:
+                column = st.selectbox("Variable", shared, key="prep_dist_column")
+                figure = plots.distribution_comparison(
+                    rows[column], transformed[column], mode=state.theme,
+                )
+                if figure is not None:
+                    st.plotly_chart(figure, use_container_width=True, key="prep_dist")
+            else:
+                caveat(
+                    "No column survives the pipeline under its original name — every one was "
+                    "encoded, renamed or replaced, so there is no like-for-like comparison to draw."
+                )
+
+            preview = pipeline.preview(features, target_series)
+            figure = plots.pipeline_shape(preview["stages"], mode=state.theme)
+            if figure is not None:
+                st.plotly_chart(figure, use_container_width=True, key="prep_shape")
+
+with compare_tab:
+    if len(state.pipeline_names) < 2:
+        empty_state(
+            "Only one pipeline",
+            "Use Duplicate above to make a variation, change a step, then compare them here.",
+        )
+    else:
+        st.caption(
+            "Each pipeline applied to the same data. Shape and collinearity are cheap to compare; "
+            "which one actually predicts better is a question for the Analysis page."
+        )
+        target_series = frame[objective.target] if objective.target in frame.columns else None
+        features = frame.drop(columns=[objective.target], errors="ignore")
+        rows_out = []
+        for name in state.pipeline_names:
+            candidate = state.pipelines[name]
+            try:
+                kept, _ = candidate.apply_row_steps(features)
+                aligned = target_series.loc[kept.index] if target_series is not None else None
+                built = candidate.build_sklearn_pipeline()
+                result = built.fit_transform(kept, aligned) if built is not None else kept
+                numeric = result.select_dtypes(include="number")
+                worst_vif = "—"
+                if numeric.shape[1] >= 3:
+                    from dsai.statistics.descriptive import variance_inflation_factors
+
+                    table = variance_inflation_factors(numeric)
+                    if not table.empty:
+                        worst_vif = f"{table.iloc[0]['vif']:.1f}"
+                rows_out.append({
+                    "Pipeline": name + ("  (active)" if name == state.active_pipeline else ""),
+                    "Steps": len(candidate.active_steps),
+                    "Rows": f"{len(result):,}",
+                    "Columns": result.shape[1],
+                    "Worst VIF": worst_vif,
+                    "Fitted in fold": len(candidate.leakage_report()["fitted_inside_cross_validation"]),
+                })
+            except Exception as exc:
+                rows_out.append({
+                    "Pipeline": name, "Steps": len(candidate.active_steps),
+                    "Rows": "failed", "Columns": "—", "Worst VIF": "—",
+                    "Fitted in fold": "—",
+                })
+                st.error(f"'{name}' could not be applied: {exc}")
+        dataframe(pd.DataFrame(rows_out))
+        caveat(
+            "A lower column count or VIF is not automatically better — dropping information can "
+            "cost accuracy. Run the Analysis page with each pipeline to find out which wins."
+        )
+
 with saved_tab:
     from dsai.repro.project import Project
 
@@ -222,7 +374,7 @@ with saved_tab:
         if saved:
             chosen = st.selectbox("Load a saved pipeline", saved)
             if st.button("Load"):
-                state.pipeline = project.load_pipeline(chosen)
+                state.add_pipeline(chosen, project.load_pipeline(chosen))
                 state.notify("success", f"Loaded pipeline '{chosen}'.")
                 st.rerun()
 

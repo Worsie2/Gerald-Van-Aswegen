@@ -32,7 +32,11 @@ class Workspace:
     context: BusinessContext = field(default_factory=BusinessContext)
     objectives: list[Objective] = field(default_factory=list)
     objective: Objective | None = None
-    pipeline: PreprocessingPipeline | None = None
+    #: Several named pipelines can be held at once and compared. ``pipeline``
+    #: below is a view onto whichever is active, so everything that predates
+    #: multiple pipelines keeps working unchanged.
+    pipelines: dict[str, PreprocessingPipeline] = field(default_factory=dict)
+    active_pipeline: str = "default"
     settings: RunSettings = field(default_factory=RunSettings)
     run: AnalysisRun | None = None
     runs: list[AnalysisRun] = field(default_factory=list)
@@ -43,6 +47,42 @@ class Workspace:
     theme: str = "light"                 # light | dark
     chat: list[dict[str, Any]] = field(default_factory=list)
     notices: list[tuple[str, str]] = field(default_factory=list)
+
+    # -- pipelines ------------------------------------------------------------
+    @property
+    def pipeline(self) -> PreprocessingPipeline | None:
+        """The pipeline currently being edited and used for analysis."""
+        return self.pipelines.get(self.active_pipeline)
+
+    @pipeline.setter
+    def pipeline(self, value: PreprocessingPipeline | None) -> None:
+        if value is None:
+            self.pipelines.pop(self.active_pipeline, None)
+        else:
+            self.pipelines[self.active_pipeline] = value
+
+    def add_pipeline(self, name: str, pipeline: PreprocessingPipeline,
+                     activate: bool = True) -> str:
+        """Store a pipeline under a name, keeping existing names distinct."""
+        base, suffix = name.strip() or "pipeline", 1
+        unique = base
+        while unique in self.pipelines and self.pipelines[unique] is not pipeline:
+            suffix += 1
+            unique = f"{base} ({suffix})"
+        pipeline.name = unique
+        self.pipelines[unique] = pipeline
+        if activate:
+            self.active_pipeline = unique
+        return unique
+
+    def remove_pipeline(self, name: str) -> None:
+        self.pipelines.pop(name, None)
+        if self.active_pipeline == name:
+            self.active_pipeline = next(iter(self.pipelines), "default")
+
+    @property
+    def pipeline_names(self) -> list[str]:
+        return list(self.pipelines)
 
     @property
     def has_data(self) -> bool:
@@ -55,7 +95,8 @@ class Workspace:
     def reset_analysis(self) -> None:
         self.run = None
         self.objective = None
-        self.pipeline = None
+        self.pipelines = {}
+        self.active_pipeline = "default"
 
     def notify(self, level: str, message: str) -> None:
         self.notices.append((level, message))

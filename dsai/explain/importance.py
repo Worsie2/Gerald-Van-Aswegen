@@ -14,6 +14,8 @@ and "SHAP" are not the same claim.
 
 from __future__ import annotations
 
+from dsai.engines.metrics import human_number
+
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -222,7 +224,7 @@ def _importances_from_coefficients(coefficients: list[dict[str, Any]]) -> list[F
                 method="coefficient magnitude",
                 interpretation=(
                     f"A one-unit increase in {row['term']} is associated with a "
-                    f"{'rise' if value > 0 else 'fall'} of {abs(value):,.4g} in the prediction, "
+                    f"{'rise' if value > 0 else 'fall'} of {human_number(abs(value))} in the prediction, "
                     "holding the other variables constant."
                 ),
             )
@@ -329,8 +331,8 @@ def partial_dependence_curve(
         "effect_size": effect,
         "trend": trend,
         "interpretation": (
-            f"Moving {feature} from {grid[0]:,.4g} to {grid[-1]:,.4g} shifts the average prediction "
-            f"by {effect:,.4g}, {trend}. Everything else is held at its observed values."
+            f"Moving {feature} from {human_number(grid[0])} to {human_number(grid[-1])} shifts the average prediction "
+            f"by {human_number(effect)}, {trend}. Everything else is held at its observed values."
         ),
     }
 
@@ -454,16 +456,16 @@ def _safe_value(row: pd.DataFrame, column: str):
 
 def _narrate_local(prediction: float, baseline: float, ordered, row) -> str:
     if not ordered:
-        return f"Predicted {prediction:,.4g}."
+        return f"Predicted {human_number(prediction)}."
     pushed_up = [(k, v) for k, v in ordered if v > 0][:3]
     pushed_down = [(k, v) for k, v in ordered if v < 0][:3]
     parts = [
-        f"Predicted {prediction:,.4g}, against a typical prediction of {baseline:,.4g} for this dataset."
+        f"Predicted {human_number(prediction)}, against a typical prediction of {human_number(baseline)} for this dataset."
     ]
     if pushed_up:
-        detail = ", ".join(f"{k} = {_safe_value(row, k)} (+{v:,.4g})" for k, v in pushed_up)
+        detail = ", ".join(f"{k} = {_safe_value(row, k)} (+{human_number(v)})" for k, v in pushed_up)
         parts.append(f"Pushed up mainly by {detail}.")
     if pushed_down:
-        detail = ", ".join(f"{k} = {_safe_value(row, k)} ({v:,.4g})" for k, v in pushed_down)
+        detail = ", ".join(f"{k} = {_safe_value(row, k)} ({human_number(v)})" for k, v in pushed_down)
         parts.append(f"Pulled down mainly by {detail}.")
     return " ".join(parts)

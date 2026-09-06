@@ -6,14 +6,14 @@ import pandas as pd
 import streamlit as st
 
 from dsai.app.components import (
-    apply_theme, caveat, sidebar_chrome, inference, dataframe, decision_panel, metric_row, page_header, require_run, show_notices, workflow_nav,
+    apply_theme, caveat, dataframe, decision_panel, inference, metric_row, page_header,
+    require_run, show_notices, sidebar_chrome, workflow_nav,
 )
 from dsai.app.state import scientist, workspace
 from dsai.core.schema import TaskType
 from dsai.engines import metrics as M
 from dsai.viz import plots
 
-st.set_page_config(page_title="Models · DSAI", page_icon="🏁", layout="wide")
 state = workspace()
 apply_theme(state.theme)
 sidebar_chrome(state)
@@ -104,7 +104,8 @@ metric_row([
 ])
 
 detail_tabs = st.tabs(
-    ["Performance", "Explanation", "Diagnostics", "Hyper-parameters", "Decision log", "Charts"]
+    ["Performance", "Explanation", "Diagnostics", "Why this row?", "More data?",
+     "Hyper-parameters", "Decision log", "Charts"]
 )
 
 with detail_tabs[0]:
@@ -204,6 +205,80 @@ with detail_tabs[2]:
                 dataframe(pd.DataFrame(calibration["bins"]))
 
 with detail_tabs[3]:
+    st.caption(
+        "Why did the model give one particular row the answer it did? Useful when someone "
+        "disputes a prediction, and the fastest way to catch a model relying on something absurd."
+    )
+    engine = scientist().engine_for(run)
+    model = scientist().fitted_model(run)
+    if engine is None or model is None:
+        st.info("The fitted model is no longer in memory. Re-run the analysis to inspect rows.")
+    else:
+        X, y, _ = engine.prepare(run.pipeline)
+        if len(X) == 0:
+            st.info("No rows available.")
+        else:
+            position = st.number_input(
+                "Row number", 0, len(X) - 1, 0,
+                help=f"0 to {len(X) - 1}, in the order the model saw them.",
+            )
+            if st.button("Explain this row"):
+                from dsai.explain.importance import explain_prediction
+
+                with st.spinner("Working out what drove this prediction…"):
+                    result = explain_prediction(model, X, int(position))
+                if not result.get("supported"):
+                    st.warning(result.get("reason", "This model does not support row explanation."))
+                else:
+                    metric_row([
+                        ("Prediction", f"{result['prediction']:,.4g}", "For this row"),
+                        ("Typical prediction", f"{result.get('baseline', 0):,.4g}",
+                         "Average across the dataset"),
+                        ("Method", result["method"], ""),
+                    ])
+                    st.markdown(result["narrative"])
+                    contributions = result.get("contributions", [])
+                    if contributions:
+                        dataframe(pd.DataFrame(contributions).round(5))
+                    st.caption(result.get("method_note", ""))
+                    st.markdown("**The row itself**")
+                    dataframe(X.iloc[[int(position)]])
+
+with detail_tabs[4]:
+    st.caption(
+        "Whether collecting more of the same data would help, or whether the limit is the "
+        "information in the features. These need different responses and are easy to confuse."
+    )
+    engine = scientist().engine_for(run)
+    model = scientist().fitted_model(run)
+    if engine is None or model is None or not best.task_type.is_supervised:
+        st.info("Available after a supervised run, while the fitted model is still in memory.")
+    elif st.button("Compute the learning curve", help="Refits the model on progressively larger samples."):
+        from dsai.explain.diagnostics import learning_curve_data
+
+        X, y, _ = engine.prepare(run.pipeline)
+        scoring = "r2" if best.task_type is TaskType.REGRESSION else "balanced_accuracy"
+        with st.spinner("Refitting on progressively larger samples…"):
+            curve = learning_curve_data(model, X, y, scoring=scoring, cv=3)
+        if not curve.get("supported"):
+            st.warning(curve.get("reason", "Could not compute a learning curve."))
+        else:
+            st.line_chart(
+                pd.DataFrame(
+                    {"training rows": curve["train_sizes"],
+                     "training score": curve["train_scores"],
+                     "held-out score": curve["test_scores"]}
+                ).set_index("training rows")
+            )
+            inference(curve["verdict"], label="What this means")
+            metric_row([
+                ("Final gap", f"{curve['final_gap']:.4f}", "Training minus held-out"),
+                ("Gain from more data", f"{curve['total_improvement']:+.4f}",
+                 "Held-out score, smallest to largest sample"),
+                ("Scored on", curve["scoring"], ""),
+            ])
+
+with detail_tabs[5]:
     if best.hyperparameters:
         dataframe(pd.DataFrame([
             {"Parameter": k, "Value": str(v)} for k, v in best.hyperparameters.items()
@@ -214,11 +289,11 @@ with detail_tabs[3]:
     for i, step in enumerate(best.preprocessing, 1):
         st.markdown(f"{i}. {step}")
 
-with detail_tabs[4]:
+with detail_tabs[6]:
     decision_panel(run.decisions, stage="model_recommendation")
     decision_panel(run.decisions, stage="model_selection")
 
-with detail_tabs[5]:
+with detail_tabs[7]:
     from dsai.viz.recommender import explain_chart_choice, recommend_charts
 
     frame = state.typed_frame if state.typed_frame is not None else state.frame

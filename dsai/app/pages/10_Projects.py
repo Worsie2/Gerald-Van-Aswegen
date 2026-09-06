@@ -11,7 +11,6 @@ from dsai.app.components import apply_theme, caveat, sidebar_chrome, dataframe, 
 from dsai.app.state import workspace
 from dsai.repro.project import Project, list_projects
 
-st.set_page_config(page_title="Projects · DSAI", page_icon="🗂", layout="wide")
 state = workspace()
 apply_theme(state.theme)
 sidebar_chrome(state)
@@ -43,8 +42,8 @@ with create_tab:
                     project.set_context(state.context)
                 else:
                     project = Project.create(path, state.frame, name, description, state.context)
-                if state.pipeline is not None:
-                    project.save_pipeline(state.pipeline)
+                for name, saved in state.pipelines.items():
+                    project.save_pipeline(saved, name)
                 for run in state.runs:
                     project.save_run(run)
                     model = state.scientist.fitted_model(run) if state.scientist else None

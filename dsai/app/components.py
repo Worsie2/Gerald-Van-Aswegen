@@ -160,6 +160,20 @@ hr {{ border-color:var(--border); margin:2rem 0; }}
 [data-testid="stSidebarNav"] a[aria-current="page"] span {{
   color:var(--accent-ink); font-weight:600;
 }}
+/* our own navigation, rendered with st.page_link */
+[data-testid="stSidebar"] [data-testid="stPageLink"] a {{
+  border-radius:5px; padding:.26rem .5rem; margin:0; min-height:0;
+}}
+[data-testid="stSidebar"] [data-testid="stPageLink"] a p {{
+  font-size:var(--t-caption) !important; color:var(--ink-2); margin:0;
+}}
+[data-testid="stSidebar"] [data-testid="stPageLink"] a:hover {{ background:var(--border); }}
+[data-testid="stSidebar"] [data-testid="stPageLink"] a[aria-current="page"] {{
+  background:var(--accent-soft);
+}}
+[data-testid="stSidebar"] [data-testid="stPageLink"] a[aria-current="page"] p {{
+  color:var(--accent-ink); font-weight:600;
+}}
 
 /* ---- the eyebrow: a small orienting label above a heading ---- */
 .dsai-eyebrow {{
@@ -393,6 +407,29 @@ def apply_theme(mode: str = "light") -> None:
     st.markdown(_stylesheet(mode), unsafe_allow_html=True)
 
 
+def _navigation() -> None:
+    """Grouped navigation, rendered by the app rather than by Streamlit.
+
+    Streamlit's automatic sidebar nav hides everything past the tenth page
+    behind a "view more" button, which put three pages out of sight. Rendering
+    it here keeps every page visible and makes the grouping explicit.
+    """
+    import streamlit as st
+
+    sections = st.session_state.get("_dsai_sections")
+    if not sections:
+        return
+    for heading, pages in sections.items():
+        if heading:
+            st.markdown(
+                f'<div class="dsai-eyebrow" style="margin:.9rem 0 .3rem">{_esc(heading)}</div>',
+                unsafe_allow_html=True,
+            )
+        for page in pages:
+            st.page_link(page, label=page.title)
+    st.divider()
+
+
 def sidebar_chrome(state: Any) -> None:
     """Shared sidebar: what is loaded, and the appearance toggle.
 
@@ -403,6 +440,7 @@ def sidebar_chrome(state: Any) -> None:
     import streamlit as st
 
     with st.sidebar:
+        _navigation()
         st.markdown('<div class="dsai-eyebrow">Workspace</div>', unsafe_allow_html=True)
         if getattr(state, "has_data", False):
             st.markdown(

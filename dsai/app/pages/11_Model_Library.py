@@ -11,7 +11,6 @@ from dsai.core.schema import TaskType
 from dsai.registry.base import REGISTRY, load_builtin_models, load_plugins
 from dsai.preprocessing.steps import STEPS
 
-st.set_page_config(page_title="Model library · DSAI", page_icon="📚", layout="wide")
 state = workspace()
 apply_theme(state.theme)
 sidebar_chrome(state)

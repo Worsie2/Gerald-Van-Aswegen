@@ -10,7 +10,6 @@ from dsai.core.profiler import apply_user_overrides
 from dsai.core.schema import BusinessContext
 from dsai.engines.objective import describe_objectives, detect_objectives
 
-st.set_page_config(page_title="Context · DSAI", page_icon="💬", layout="wide")
 state = workspace()
 apply_theme(state.theme)
 sidebar_chrome(state)

@@ -17,5 +17,8 @@ headless            = true
 gatherUsageStats    = false
 
 [client]
+# The built-in sidebar nav hides everything past the tenth page behind a
+# "view more" button. The app renders its own grouped navigation instead.
+showSidebarNavigation = false
 toolbarMode         = "minimal"
 showErrorDetails    = true

@@ -6,14 +6,14 @@ import pandas as pd
 import streamlit as st
 
 from dsai.app.components import (
-    apply_theme, caveat, sidebar_chrome, dataframe, finding_card, page_header, require_run, show_notices, workflow_nav,
+    apply_theme, caveat, dataframe, finding_card, inference, metric_row, page_header,
+    require_run, show_notices, sidebar_chrome, workflow_nav,
 )
 from dsai.app.state import workspace
 from dsai.core.schema import EvidenceKind
 from dsai.engines.insight import group_by_evidence
 from dsai.viz import plots
 
-st.set_page_config(page_title="Insights · DSAI", page_icon="🔎", layout="wide")
 state = workspace()
 apply_theme(state.theme)
 sidebar_chrome(state)
@@ -121,6 +121,75 @@ if run.associations is not None and run.associations.rules:
         }
         for r in run.associations.rules
     ]))
+
+# --------------------------------------------------------------------------
+# anomalies, cluster sweep, hypothesis tests, exploration
+# --------------------------------------------------------------------------
+if run.anomalies:
+    st.subheader("Rows that look unlike the rest")
+    st.caption(
+        f"{len(run.anomalies)} row(s) flagged, ordered by how unusual they are. Each carries the "
+        "reason it stood out. Unusual is not the same as wrong — these are rows worth a human "
+        "looking at, not rows to delete."
+    )
+    dataframe(pd.DataFrame(run.anomalies))
+    caveat(
+        "There are no labels here, so 'anomalous' means 'unlike the rest of this data'. Whether "
+        "a flagged row is a problem, a data-entry error or your best customer is your judgement."
+    )
+    st.divider()
+
+if run.cluster_sweep and run.cluster_sweep.get("supported"):
+    st.subheader("How many segments?")
+    sweep = run.cluster_sweep
+    metric_row([
+        ("Recommended", str(sweep["recommended_k"]), sweep["agreement"] + " agree"),
+        ("Elbow", str(sweep["elbow_k"] or "—"), "Where added segments stop paying"),
+        ("Best silhouette", str(sweep["best_silhouette_k"]), "Separation between segments"),
+        ("Best Davies-Bouldin", str(sweep["best_davies_bouldin_k"]), "Lower is better"),
+    ])
+    inference(sweep["interpretation"], label="Cluster count")
+    dataframe(pd.DataFrame(sweep["table"]).round(4))
+    st.divider()
+
+if run.tests:
+    st.subheader("Statistical comparisons")
+    st.caption(
+        "Each comparison checked its own assumptions, was cross-checked against the "
+        "non-parametric equivalent, and the p-values are adjusted for the number of tests run."
+    )
+    dataframe(pd.DataFrame([
+        {
+            "Grouped by": t["group"],
+            "Test": t["primary"].test,
+            "p-value": round(t["primary"].p_value, 6),
+            "Adjusted p": round(t["adjusted_p"], 6),
+            "Significant": "yes" if t["significant_after_correction"] else "no",
+            "Effect size": round(t["primary"].effect_size or 0, 4),
+            "Effect": t["primary"].effect_interpretation,
+            "Cross-check agrees": "yes" if t["primary"].significant == t["secondary"].significant else "no",
+        }
+        for t in run.tests
+    ]))
+    caveat(
+        "A significant p-value says a difference is unlikely to be chance. The effect size says "
+        "whether it is big enough to act on. They are different questions and both are shown."
+    )
+    st.divider()
+
+if run.exploration.get("outliers"):
+    st.subheader("Distribution and outliers")
+    dataframe(pd.DataFrame(run.exploration["outliers"]).round(3))
+    st.divider()
+
+if run.exploration.get("correlations"):
+    st.subheader("Relationships between variables")
+    dataframe(pd.DataFrame(run.exploration["correlations"]).round(4))
+    figure = plots.correlation_heatmap(frame, run.profile.numeric_columns, mode=state.theme)
+    if figure is not None:
+        st.plotly_chart(figure, use_container_width=True, key="insight_corr")
+    caveat("Correlation is not causation.")
+    st.divider()
 
 st.divider()
 

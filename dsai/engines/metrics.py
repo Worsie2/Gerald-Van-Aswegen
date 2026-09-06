@@ -299,6 +299,32 @@ def explain_metric(metric: str) -> str:
     return METRIC_EXPLANATIONS.get(metric, f"'{metric}' is a model evaluation measure.")
 
 
+def human_number(value: Any, places: int = 4) -> str:
+    """Format a number the way a person reads one.
+
+    ``f"{v:,.4g}"`` turns 30320 into "3.032e+04". That is correct and unreadable,
+    and these numbers appear in findings, recommendations and reports that
+    non-specialists have to act on. Scientific notation is kept only where the
+    magnitude genuinely warrants it.
+    """
+    if value is None:
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not np.isfinite(number):
+        return "—"
+    magnitude = abs(number)
+    if magnitude != 0 and (magnitude >= 1e12 or magnitude < 1e-4):
+        return f"{number:.{places - 1}e}"
+    if magnitude >= 1000:
+        return f"{number:,.0f}"
+    if magnitude >= 1:
+        return f"{number:,.2f}".rstrip("0").rstrip(".")
+    return f"{number:,.{places}g}"
+
+
 def format_metric(metric: str, value: float | None) -> str:
     if value is None or (isinstance(value, float) and not np.isfinite(value)):
         return "—"

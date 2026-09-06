@@ -17,6 +17,7 @@ from dsai.core.schema import (
     BusinessContext, Confidence, DatasetProfile, EvidenceKind, Finding, Objective, TaskType,
 )
 from dsai.engines import metrics as M
+from dsai.engines.metrics import human_number
 from dsai.engines.experiment import ExperimentResult
 from dsai.explain.importance import ExplanationBundle
 
@@ -96,14 +97,14 @@ def _data_findings(profile: DatasetProfile, frame: pd.DataFrame | None) -> list[
             Finding(
                 title=f"'{name}' is heavily concentrated at one end of its range",
                 detail=(
-                    f"Skewness of {skew:.2f}. The median is {column.median:,.4g} while the mean is "
-                    f"{column.mean:,.4g} — a gap that size means averages will mislead anyone reading "
+                    f"Skewness of {skew:.2f}. The median is {human_number(column.median)} while the mean is "
+                    f"{human_number(column.mean)} — a gap that size means averages will mislead anyone reading "
                     "them. Report the median, or a distribution, instead."
                 ),
                 kind=EvidenceKind.OBSERVED,
                 evidence=[
-                    f"Median {column.median:,.4g} versus mean {column.mean:,.4g}",
-                    f"Range {column.minimum:,.4g} to {column.maximum:,.4g}",
+                    f"Median {human_number(column.median)} versus mean {human_number(column.mean)}",
+                    f"Range {human_number(column.minimum)} to {human_number(column.maximum)}",
                 ],
                 columns=[name],
                 confidence=Confidence.HIGH,
@@ -287,7 +288,7 @@ def _driver_findings(
             ),
             kind=EvidenceKind.MODEL,
             evidence=[
-                f"{f.feature}: importance {f.importance:,.4g}"
+                f"{f.feature}: importance {human_number(f.importance)}"
                 + (f" ({f.direction})" if f.direction else "")
                 for f in top
             ],
@@ -333,8 +334,8 @@ def _driver_findings(
                     ),
                     kind=EvidenceKind.STATISTICAL,
                     evidence=[
-                        f"{c['term']}: {c['coefficient']:,.4g} (p = {c['p_value']:.4f}, "
-                        f"95% CI {c.get('ci_lower', float('nan')):,.4g} to {c.get('ci_upper', float('nan')):,.4g})"
+                        f"{c['term']}: {human_number(c['coefficient'])} (p = {c['p_value']:.4f}, "
+                        f"95% CI {human_number(c.get('ci_lower', float('nan')))} to {human_number(c.get('ci_upper', float('nan')))})"
                         for c in reliable[:6]
                     ],
                     columns=[c["term"] for c in reliable[:6]],
@@ -385,7 +386,7 @@ def _series_findings(series_analysis: dict[str, Any] | None, objective: Objectiv
                 kind=EvidenceKind.STATISTICAL,
                 evidence=[
                     f"Rank correlation with time = {trend['rank_correlation']:.3f} (p = {trend['p_value']:.2e})",
-                    f"Change of {trend['total_change']:,.4g} across the series"
+                    f"Change of {human_number(trend['total_change'])} across the series"
                     + (f" ({trend['pct_change_over_series']:+.1f}%)" if trend.get("pct_change_over_series") else ""),
                 ],
                 confidence=Confidence.HIGH,
@@ -400,7 +401,7 @@ def _series_findings(series_analysis: dict[str, Any] | None, objective: Objectiv
                 kind=EvidenceKind.STATISTICAL,
                 evidence=[
                     f"Explains {seasonality['strength']:.1%} of the variation",
-                    f"Swing of {seasonality['amplitude']:,.4g} between peak and trough",
+                    f"Swing of {human_number(seasonality['amplitude'])} between peak and trough",
                 ],
                 confidence=Confidence.HIGH,
             )
@@ -413,8 +414,8 @@ def _series_findings(series_analysis: dict[str, Any] | None, objective: Objectiv
                 detail=breaks["interpretation"],
                 kind=EvidenceKind.STATISTICAL,
                 evidence=[
-                    f"Mean before: {breaks['mean_before']:,.4g}",
-                    f"Mean after: {breaks['mean_after']:,.4g}",
+                    f"Mean before: {human_number(breaks['mean_before'])}",
+                    f"Mean after: {human_number(breaks['mean_after'])}",
                 ],
                 confidence=Confidence.MODERATE,
             )

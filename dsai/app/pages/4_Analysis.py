@@ -13,7 +13,6 @@ from dsai.core.schema import Objective, TaskType
 from dsai.engines.decision import Constraints, plan_analysis
 from dsai.engines.orchestrator import RunSettings
 
-st.set_page_config(page_title="Analysis · DSAI", page_icon="🧪", layout="wide")
 state = workspace()
 apply_theme(state.theme)
 sidebar_chrome(state)
@@ -89,6 +88,40 @@ if choice == "Define my own":
                                        disabled=task is not TaskType.CLUSTERING)
     horizon = extra[1].number_input("Forecast horizon (0 = default)", 0, 120, 0,
                                     disabled=task is not TaskType.TIME_SERIES_FORECAST)
+
+    extras: dict = {}
+    if task is TaskType.ASSOCIATION_RULES:
+        st.markdown("**Basket layout**")
+        st.caption(
+            "Association mining needs one row per item per transaction. Name the two columns that "
+            "identify them, or leave both blank and the platform will try to work the layout out."
+        )
+        basket = st.columns(4)
+        transaction_column = basket[0].selectbox(
+            "Transaction ID column", ["— detect —"] + list(profile.columns))
+        item_column = basket[1].selectbox(
+            "Item column", ["— detect —"] + list(profile.columns))
+        min_support = basket[2].slider(
+            "Minimum support", 0.005, 0.5, 0.05, 0.005,
+            help="Share of transactions an itemset must appear in. Lower finds more rules, "
+                 "most of them noise.")
+        min_confidence = basket[3].slider(
+            "Minimum confidence", 0.05, 0.95, 0.30, 0.05,
+            help="How often the rule must hold when its condition is met.")
+        extras = {
+            "transaction_column": None if transaction_column.startswith("—") else transaction_column,
+            "item_column": None if item_column.startswith("—") else item_column,
+            "min_support": min_support,
+            "min_confidence": min_confidence,
+        }
+
+    if task is TaskType.CLUSTERING and not n_clusters:
+        st.caption(
+            "With no number set, the platform sweeps a range and compares the elbow, silhouette, "
+            "Calinski-Harabasz and Davies-Bouldin measures. Where they agree that is a real signal; "
+            "where they disagree the data has no sharp cluster structure and the number is yours to choose."
+        )
+
     objective = Objective(
         task_type=task,
         target=None if target.startswith("—") else target,
@@ -99,6 +132,7 @@ if choice == "Define my own":
         rationale="You defined this objective directly.",
         source="user_override",
         priority=1.0,
+        extras=extras,
     )
 else:
     objective = objectives[labels.index(choice)]
@@ -233,7 +267,8 @@ if st.button(label, type="primary", use_container_width=True):
             engine.interpret(run)
         state.run = run
         state.runs.append(run)
-        state.pipeline = run.pipeline
+        if run.pipeline is not None:
+            state.add_pipeline("from last run", run.pipeline)
         state.typed_frame = engine._typed_frame
         state.notify("success", f"Analysis complete in {run.duration_s}s. {run.summary()}")
         st.rerun()

@@ -7,96 +7,61 @@ Run with::
 or::
 
     dsai app
+
+Navigation is declared here rather than inferred from filenames. Twelve pages in
+a flat list is not an information architecture, and Streamlit hides everything
+past the tenth behind a "view more" control — so the pages are grouped by what
+you are trying to do, and all of them stay visible.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
-from dsai.app.components import apply_theme, caveat, metric_row, page_header, sidebar_chrome
-from dsai.app.state import workspace
-from dsai.preprocessing.steps import STEPS
-from dsai.registry.base import REGISTRY, load_builtin_models
-
-st.set_page_config(page_title="DSAI — AI data science workspace", page_icon="◔", layout="wide")
-
-state = workspace()
-apply_theme(state.theme)
-sidebar_chrome(state)
-load_builtin_models()
-
-page_header(
-    "An AI data scientist, not a chatbot about one",
-    "Upload data and the platform profiles it, decides what analysis it supports, builds "
-    "preprocessing suited to each candidate model, trains and cross-validates a field of them, "
-    "compares them on more than the headline score, explains the winner, checks its own "
-    "conclusions, and tells you what to do — with the evidence attached to every claim.",
-    "Workspace",
+st.set_page_config(
+    page_title="DSAI — AI data science workspace",
+    page_icon="◔",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-stats = REGISTRY.stats()
-metric_row([
-    ("Algorithms", f"{stats['total']}", f"{stats['available']} available in this environment"),
-    ("Preprocessing steps", f"{len(STEPS)}", "Leakage-controlled by construction"),
-    ("Statistical tests", "15+", "Each with assumptions and effect size"),
-    ("Export formats", "6", "Including runnable Python"),
-])
+PAGES = Path(__file__).parent / "pages"
+VIEWS = Path(__file__).parent / "views"
 
-left, right = st.columns(2, gap="large")
 
-with left:
-    st.markdown("## The workflow")
-    st.markdown(
-        """
-1. **Data** — load it; every variable is profiled and quality problems flagged
-2. **Context** — tell it what the data means; kept separate from what was measured
-3. **Preprocessing** — review, edit or build the pipeline; leakage prevented structurally
-4. **Analysis** — choose the objective, see the plan, run it
-5. **Models** — the tournament, the selected model, its explanation and diagnostics
-6. **Insights** — findings, grouped by the kind of evidence behind them
-7. **Recommendations** — what to do, traced back to the analysis
-        """
-    )
-    st.caption("Also: Ask for plain-language questions · Report to export · Projects to save work.")
+def _page(path: Path, title: str, *, default: bool = False) -> st.Page:
+    return st.Page(str(path), title=title, default=default)
 
-with right:
-    st.markdown("## Three ways to work")
-    st.markdown(
-        """
-**AI automatic** — *"Do the analysis for me."* It runs the whole workflow and reports what
-it found and what it decided.
 
-**AI assisted** — *"Recommend what I should do, then let me approve it."* It plans, you
-adjust, then it runs.
+SECTIONS = {
+        "": [_page(VIEWS / "0_Overview.py", "Overview", default=True)],
+        "Workflow": [
+            _page(PAGES / "1_Data.py", "1 · Data"),
+            _page(PAGES / "2_Context.py", "2 · Context"),
+            _page(PAGES / "3_Preprocessing.py", "3 · Preprocessing"),
+            _page(PAGES / "4_Analysis.py", "4 · Analysis"),
+            _page(PAGES / "5_Models.py", "5 · Models"),
+            _page(PAGES / "6_Insights.py", "6 · Insights"),
+            _page(PAGES / "7_Recommendations.py", "7 · Recommendations"),
+        ],
+        "Investigate": [
+            _page(PAGES / "8_Ask.py", "Ask a question"),
+            _page(PAGES / "12_Statistics.py", "Statistics"),
+        ],
+        "Output": [
+            _page(PAGES / "9_Report.py", "Report"),
+            _page(PAGES / "10_Projects.py", "Projects"),
+        ],
+        "Reference": [
+            _page(PAGES / "11_Model_Library.py", "Model library"),
+        ],
+}
 
-**Manual / expert** — *"I know what I want."* Full control of the objective, variables,
-pipeline, algorithms, hyper-parameters, validation strategy and metrics.
-        """
-    )
-    st.caption("All three use the same engine. Only the amount you decide changes.")
+# The sidebar renders these itself, so every page stays visible and the groups
+# are shown rather than implied.
+st.session_state["_dsai_sections"] = SECTIONS
 
-st.markdown("## What it will not do")
-for limit in [
-    "Claim a model is best in general. It reports the best-performing model *for this dataset "
-    "under the validation strategy used*, and names the simplest acceptable alternative alongside it.",
-    "Present a correlation as a cause. Every model-derived finding is labelled as an association, "
-    "with the caveat attached rather than buried.",
-    "Hide a weak result. If nothing beats a model that ignores every predictor, it says so "
-    "plainly instead of presenting the least-bad option.",
-    "Let preprocessing leak. Anything that learns from the data is fitted inside each "
-    "cross-validation fold, never on the full dataset.",
-    "Mix your assumptions with its measurements. What you told it is reported separately from "
-    "what it found.",
-]:
-    caveat(limit, label="Never")
-
-if not state.has_data:
-    st.divider()
-    st.markdown(
-        '<div class="dsai-decide"><span class="dsai-decide-label">Start here</span>'
-        "Open the <strong>Data</strong> page in the sidebar. There are six sample datasets with "
-        "deliberately known structure if you would rather look around before using your own — you "
-        "already know the right answer, so you can judge whether to trust the platform elsewhere."
-        "</div>",
-        unsafe_allow_html=True,
-    )
+navigation = st.navigation(SECTIONS)
+navigation.run()

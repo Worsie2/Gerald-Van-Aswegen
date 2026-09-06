@@ -10,7 +10,6 @@ from dsai.app.state import scientist, workspace
 from dsai.engines.nl import answer_question, intent_to_objective, parse_command
 from dsai.engines.orchestrator import RunSettings
 
-st.set_page_config(page_title="Ask · DSAI", page_icon="💭", layout="wide")
 state = workspace()
 apply_theme(state.theme)
 sidebar_chrome(state)
@@ -125,7 +124,8 @@ if intent is not None:
                     )
                 state.run = run
                 state.runs.append(run)
-                state.pipeline = run.pipeline
+                if run.pipeline is not None:
+                    state.add_pipeline("from last run", run.pipeline)
                 state.typed_frame = engine._typed_frame
                 state.chat.append({"role": "assistant", "content": f"Done. {run.summary()}"})
                 st.session_state["_pending_intent"] = None

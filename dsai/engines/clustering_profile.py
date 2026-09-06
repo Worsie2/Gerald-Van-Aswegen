@@ -8,6 +8,8 @@ and a plain-English description with the evidence attached.
 
 from __future__ import annotations
 
+from dsai.engines.metrics import human_number
+
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -164,8 +166,8 @@ def _describe_cluster(cluster: ClusterProfile, currency: str) -> str:
             f"{abs(feature['std_deviations']):.1f} standard deviations {feature['direction']}"
         )
         parts.append(
-            f"{feature['feature']} averages {feature['cluster_mean']:,.4g} "
-            f"({magnitude} than the overall average of {feature['overall_mean']:,.4g})"
+            f"{feature['feature']} averages {human_number(feature['cluster_mean'])} "
+            f"({magnitude} than the overall average of {human_number(feature['overall_mean'])})"
         )
     description = f"{cluster.size:,} rows ({cluster.share:.1%}). " + "; ".join(parts) + "."
     if cluster.categorical_modes:
@@ -283,7 +285,7 @@ def _cluster_findings(out: SegmentationProfile, n_rows: int) -> list[Finding]:
                     detail=cluster.description,
                     kind=EvidenceKind.MODEL,
                     evidence=[
-                        f"{f['feature']}: {f['cluster_mean']:,.4g} versus {f['overall_mean']:,.4g} overall"
+                        f"{f['feature']}: {human_number(f['cluster_mean'])} versus {human_number(f['overall_mean'])} overall"
                         for f in cluster.defining_features[:3]
                     ],
                     columns=[f["feature"] for f in cluster.defining_features[:3]],

@@ -17,6 +17,7 @@ from dsai.core.schema import (
     Recommendation, TaskType,
 )
 from dsai.engines import metrics as M
+from dsai.engines.metrics import human_number
 from dsai.engines.experiment import ExperimentResult
 from dsai.engines.selfcheck import SelfCheckReport, validate_recommendation
 from dsai.explain.importance import ExplanationBundle
@@ -116,8 +117,8 @@ def _action_recommendations(
         ]
         if column and column.is_numeric and column.mean is not None:
             evidence.append(
-                f"'{feature.feature}' ranges {column.minimum:,.4g} to {column.maximum:,.4g}, "
-                f"median {column.median:,.4g}"
+                f"'{feature.feature}' ranges {human_number(column.minimum)} to {human_number(column.maximum)}, "
+                f"median {human_number(column.median)}"
             )
         direction_text = ""
         if feature.direction:
@@ -207,7 +208,7 @@ def _segment_recommendations(segmentation: Any, context: BusinessContext,
                     f"Segment size: {valuable.size:,} rows ({valuable.share:.1%})",
                     f"{driver['feature']}: {driver['cluster_mean']:,.2f} versus {driver['overall_mean']:,.2f} overall",
                 ] + [
-                    f"{f['feature']}: {f['cluster_mean']:,.4g} ({f['direction']} than average)"
+                    f"{f['feature']}: {human_number(f['cluster_mean'])} ({f['direction']} than average)"
                     for f in valuable.defining_features[1:3]
                 ],
                 confidence=Confidence.MODERATE if valuable.size >= 30 else Confidence.LOW,
@@ -271,7 +272,7 @@ def _forecast_recommendations(series_analysis, best: ExperimentResult | None,
         projected = float(np.mean(forecast))
         change = ((projected - recent) / abs(recent) * 100) if recent else None
         evidence = [
-            f"Forecast over the next {horizon} period(s): {projected:,.4g} on average",
+            f"Forecast over the next {horizon} period(s): {human_number(projected)} on average",
             f"Model: {best.model_name}",
         ]
         if mase is not None:
@@ -281,13 +282,13 @@ def _forecast_recommendations(series_analysis, best: ExperimentResult | None,
             )
         if best.extras.get("forecast_lower"):
             evidence.append(
-                f"95% interval on the first period: {best.extras['forecast_lower'][0]:,.4g} to "
-                f"{best.extras['forecast_upper'][0]:,.4g}"
+                f"95% interval on the first period: {human_number(best.extras['forecast_lower'][0])} to "
+                f"{human_number(best.extras['forecast_upper'][0])}"
             )
         out.append(
             Recommendation(
                 action=(
-                    f"Plan for {objective.target} averaging {projected:,.4g} over the next "
+                    f"Plan for {objective.target} averaging {human_number(projected)} over the next "
                     f"{horizon} period(s)"
                     + (f", about {change:+.1f}% against the most recent comparable window" if change is not None else "")
                 ),
@@ -318,7 +319,7 @@ def _forecast_recommendations(series_analysis, best: ExperimentResult | None,
                 Recommendation(
                     action=f"Refit the forecast using only data after {breaks['label']}",
                     reason=(
-                        f"The level shifts from {breaks['mean_before']:,.4g} to {breaks['mean_after']:,.4g} "
+                        f"The level shifts from {human_number(breaks['mean_before'])} to {human_number(breaks['mean_after'])} "
                         "at that point. Training across the break averages two different regimes and "
                         "will under-predict the current one."
                     ),

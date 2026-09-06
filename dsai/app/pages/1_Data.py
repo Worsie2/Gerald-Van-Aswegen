@@ -12,7 +12,6 @@ from dsai.core.profiler import override_semantic_type
 from dsai.core.schema import SemanticType
 from dsai.dataio.loaders import LoadError, excel_sheet_names, list_sql_tables, load_file, load_sql
 
-st.set_page_config(page_title="Data · DSAI", page_icon="📄", layout="wide")
 state = workspace()
 apply_theme(state.theme)
 sidebar_chrome(state)
