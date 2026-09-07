@@ -389,10 +389,6 @@ def _app(args) -> int:
         return 1
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
 def _doctor(args) -> int:
     from dsai.doctor import render, run_checks
 
@@ -489,3 +485,7 @@ def _predict(args) -> int:
             for row in moved.head(6).itertuples(index=False):
                 print(f"   {row.Column:24} {row.Reading}")
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
