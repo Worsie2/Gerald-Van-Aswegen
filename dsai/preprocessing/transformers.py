@@ -363,6 +363,111 @@ class AggregationFeatures(BaseEstimator, TransformerMixin):
         return np.asarray(names, dtype=object)
 
 
+class GroupImputer(BaseEstimator, TransformerMixin):
+    """Fill gaps with a statistic computed *within a group*, not across everything.
+
+    Imputing a customer's missing spend with the average of all customers throws
+    away the thing that makes the estimate any good: that customers in the same
+    region, tier or segment resemble each other more than they resemble the
+    dataset as a whole. A global mean pulls every gap toward one number and
+    flattens exactly the variation a model is there to find.
+
+    Two things this has to get right, and both are about the fold boundary:
+
+    * the per-group statistics are learned in ``fit``, so they come from the
+      training rows only and can never carry a test row's value back; and
+    * a group present in the test fold but absent from the training fold has no
+      learned statistic, so it falls back to the overall training statistic
+      rather than producing a NaN that a model would then refuse.
+    """
+
+    def __init__(self, columns: list[str] | None = None, group_by: str = "",
+                 strategy: str = "median"):
+        self.columns = columns
+        self.group_by = group_by
+        self.strategy = strategy
+
+    def _statistic(self, series: pd.Series) -> float | Any:
+        if self.strategy == "mean":
+            return series.mean()
+        if self.strategy == "median":
+            return series.median()
+        if self.strategy == "most_frequent":
+            modes = series.mode(dropna=True)
+            return modes.iloc[0] if len(modes) else np.nan
+        raise ValueError(f"Unknown strategy '{self.strategy}'")
+
+    def fit(self, X, y=None):
+        frame = _as_frame(X)
+        self.columns_ = [c for c in (self.columns or frame.columns) if c in frame.columns]
+        self.columns_ = [c for c in self.columns_ if c != self.group_by]
+        self.group_maps_: dict[str, dict[Any, Any]] = {}
+        self.fallbacks_: dict[str, Any] = {}
+
+        usable = self.group_by in frame.columns
+        for column in self.columns_:
+            series = frame[column]
+            self.fallbacks_[column] = self._statistic(series)
+            if usable:
+                grouped = series.groupby(frame[self.group_by].astype("string"), dropna=True)
+                self.group_maps_[column] = {
+                    key: value for key, value in grouped.apply(self._statistic).items()
+                    if pd.notna(value)
+                }
+            else:
+                self.group_maps_[column] = {}
+        self.group_available_ = usable
+        return self
+
+    def transform(self, X):
+        frame = _as_frame(X).copy()
+        if self.group_available_ and self.group_by in frame.columns:
+            keys = frame[self.group_by].astype("string")
+        else:
+            keys = None
+        for column in self.columns_:
+            if column not in frame.columns:
+                continue
+            gaps = frame[column].isna()
+            if not gaps.any():
+                continue
+            if keys is not None:
+                filled = keys[gaps].map(self.group_maps_.get(column, {}))
+                frame.loc[gaps, column] = filled.to_numpy()
+            # Whatever is still missing had no group statistic to draw on.
+            still = frame[column].isna()
+            if still.any():
+                frame.loc[still, column] = self.fallbacks_[column]
+        return frame
+
+    def get_feature_names_out(self, input_features=None):
+        return np.asarray(list(input_features) if input_features is not None else self.columns_,
+                          dtype=object)
+
+    def learned_values(self) -> dict[str, dict[str, Any]]:
+        """The statistics this imputer actually learned, for the report.
+
+        A reader who is told "missing values were imputed" learns nothing about
+        whether that was reasonable. A reader who is shown the number used for
+        each group can judge it.
+        """
+        out: dict[str, dict[str, Any]] = {}
+        for column in getattr(self, "columns_", []):
+            values = {str(k): _round(v) for k, v in self.group_maps_.get(column, {}).items()}
+            values["(no group / unseen group)"] = _round(self.fallbacks_.get(column))
+            out[column] = values
+        return out
+
+
+def _round(value: Any, places: int = 4) -> Any:
+    try:
+        if value is None or (isinstance(value, float) and not np.isfinite(value)):
+            return None
+        return round(float(value), places)
+    except (TypeError, ValueError):
+        return value
+
+
 class IdentityTransformer(BaseEstimator, TransformerMixin):
     """Passes data through unchanged — used when a step is disabled."""
 

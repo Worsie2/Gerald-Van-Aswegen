@@ -56,6 +56,11 @@ METRIC_EXPLANATIONS = {
 }
 
 
+def higher_is_better(metric: str) -> bool:
+    """Which direction counts as an improvement for this metric."""
+    return metric not in LOWER_IS_BETTER
+
+
 def is_better(metric: str, a: float, b: float) -> bool:
     """True when score `a` is better than score `b` for this metric."""
     if a is None or (isinstance(a, float) and np.isnan(a)):
@@ -293,6 +298,41 @@ def default_metrics(task_type: TaskType) -> list[str]:
         TaskType.CLUSTERING: ["silhouette", "calinski_harabasz", "davies_bouldin", "n_clusters"],
         TaskType.ANOMALY_DETECTION: ["n_anomalies", "anomaly_rate"],
     }.get(task_type, [])
+
+
+#: How each metric is computed, written out. A reader checking whether a number
+#: is right needs the definition, not only a description of what it means — and
+#: several of these (MAPE near zero, MASE against a naive forecast) behave in
+#: ways the formula makes obvious and prose does not.
+METRIC_FORMULAS = {
+    "r2": "1 − SS_res / SS_tot, where SS_res = Σ(y − ŷ)² and SS_tot = Σ(y − ȳ)²",
+    "rmse": "√( Σ(y − ŷ)² / n )",
+    "mae": "Σ|y − ŷ| / n",
+    "mape": "100 × Σ|(y − ŷ) / y| / n  — undefined where y = 0",
+    "smape": "100 × Σ( |y − ŷ| / ((|y| + |ŷ|) / 2) ) / n",
+    "mase": "MAE(model) / MAE(naive), where the naive forecast repeats the previous value",
+    "accuracy": "(TP + TN) / (TP + TN + FP + FN)",
+    "balanced_accuracy": "mean of per-class recall = mean( TP_c / (TP_c + FN_c) ) over classes c",
+    "precision": "TP / (TP + FP) — of those predicted positive, how many were",
+    "recall": "TP / (TP + FN) — of the actual positives, how many were caught",
+    "f1": "2 × precision × recall / (precision + recall)",
+    "f1_macro": "mean of the per-class F1 scores, each class weighted equally",
+    "roc_auc": "area under the true-positive-rate against false-positive-rate curve",
+    "pr_auc": "area under the precision-against-recall curve (average precision)",
+    "mcc": "(TP×TN − FP×FN) / √((TP+FP)(TP+FN)(TN+FP)(TN+FN))",
+    "log_loss": "−Σ( y·log(p) + (1−y)·log(1−p) ) / n",
+    "brier": "Σ(p − y)² / n — mean squared error of the predicted probability",
+    "silhouette": "mean over points of (b − a) / max(a, b), a = mean distance within the cluster, "
+                  "b = mean distance to the nearest other cluster",
+    "calinski_harabasz": "(between-cluster dispersion / (k−1)) / (within-cluster dispersion / (n−k))",
+    "davies_bouldin": "mean over clusters of the worst-case similarity to any other cluster — "
+                      "lower is better",
+    "explained_variance": "1 − Var(y − ŷ) / Var(y)",
+}
+
+
+def metric_formula(metric: str) -> str:
+    return METRIC_FORMULAS.get(metric, "")
 
 
 def explain_metric(metric: str) -> str:

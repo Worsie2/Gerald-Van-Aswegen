@@ -73,12 +73,19 @@ def build_report(
     include_charts: bool = True,
     frame: pd.DataFrame | None = None,
     mode: str = "light",
+    include_methodology: bool = False,
 ) -> Report:
     """Assemble the full report from a completed :class:`AnalysisRun`.
 
     ``frame`` is optional: given it, the report can draw the relationships in the
     raw data as a heatmap; without it, the measured pairs on the profile carry
     the same point.
+
+    ``include_methodology`` adds three sections that answer a different question
+    from the rest of the report — how the analysis was run, the arithmetic behind
+    every figure it reports, and whether anything went wrong producing it. Off by
+    default because most readers do not want them; available always because the
+    reader who does should not have to ask anyone for them.
     """
     currency = currency or (run.context.currency if run.context else "ZAR")
     report = Report(
@@ -106,6 +113,10 @@ def build_report(
         sections.append(("Recommendations", _recommendations_section(run, plain=False)))
     sections.append(("Risks and limitations", _limitations_section(run)))
     sections.append(("Suggested next analyses", _next_steps_section(run)))
+    if include_methodology:
+        sections.append(("Methodology", _methodology_section(run)))
+        sections.append(("The calculations", _calculations_section(run)))
+        sections.append(("Did it run cleanly", _run_integrity_section(run)))
     if audience in ("both", "technical"):
         sections.append(("How the platform decided", _decision_log_section(run)))
         sections.append(("Reproducibility", _reproducibility_section(run)))
@@ -672,6 +683,377 @@ def _next_steps_section(run: Any) -> str:
         lines += ["", "**Other questions this dataset can answer**", ""]
         for objective in run.objectives[1:4]:
             lines.append(f"- {objective.label()} — {objective.rationale}")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
+# methodology, calculations, and did it actually run
+#
+# These three answer a different question from the rest of the report. The rest
+# says what was found; these say how, with what, and whether anything went wrong
+# on the way. A reader who cannot check the second set has to take the first on
+# trust.
+# --------------------------------------------------------------------------
+
+def _methodology_section(run: Any) -> str:
+    """The method in full: the design, the split, the metrics and their definitions."""
+    plan, objective, best = run.plan, run.objective, run.best
+    lines: list[str] = []
+
+    if objective is not None:
+        lines += [
+            "**The question**",
+            "",
+            f"- Problem type: {objective.task_type.value.replace('_', ' ')}",
+            f"- Target variable: `{objective.target}`" if objective.target
+            else "- No target variable — this is an unsupervised problem",
+        ]
+        if objective.features:
+            lines.append(f"- Predictors restricted to {len(objective.features)} named column(s)")
+        lines += [f"- Chosen because: {objective.rationale}", ""]
+
+    if plan is not None:
+        strategy = plan.validation_strategy
+        lines += [
+            "**Validation design**",
+            "",
+            f"- Strategy: {strategy.get('strategy', '—').replace('_', ' ')}",
+            f"- Folds: {strategy.get('n_splits', '—')}",
+            f"- Chosen because: {strategy.get('reason', '—')}",
+            f"- Ranked on: {plan.primary_metric}",
+            "",
+            "Every model in the comparison was given the same split, the same folds and the same "
+            "random seed. A comparison where the models saw different data is not a comparison.",
+            "",
+        ]
+
+    if best is not None:
+        total = best.n_train + best.n_test
+        lines += [
+            "**How the rows were divided**",
+            "",
+            "| | Rows | Share | Used for |",
+            "| --- | ---: | ---: | --- |",
+            f"| Training | {best.n_train:,} | {best.n_train / total:.1%} | "
+            "Fitting the model, and fitting every preprocessing step that learns anything |",
+            f"| Held out | {best.n_test:,} | {best.n_test / total:.1%} | "
+            "Scored once, at the end. Never seen during fitting or selection |",
+            f"| Total | {total:,} | 100% | |",
+            "",
+            f"Within the training rows, {run.plan.validation_strategy.get('n_splits', '—') if run.plan else '—'} "
+            "cross-validation folds were cut. Each fold refits the preprocessing from scratch on "
+            "its own training portion, so a value from the fold's validation rows cannot reach "
+            "back into how those rows were transformed.",
+            "",
+            f"- Random seed: {best.random_seed} (recorded, so the split can be reproduced exactly)",
+            f"- Features after preprocessing: {best.n_features_out}",
+            "",
+        ]
+
+    metric_names = M.default_metrics(best.task_type) if best else []
+    if metric_names:
+        lines += [
+            "**What each metric measures, and how it is computed**",
+            "",
+            "| Metric | Direction | Definition | What it means |",
+            "| --- | --- | --- | --- |",
+        ]
+        for metric in metric_names:
+            better = "higher is better" if M.higher_is_better(metric) else "lower is better"
+            formula = M.metric_formula(metric).replace("|", "\\|")
+            lines.append(
+                f"| {M.METRIC_LABELS.get(metric, metric)} | {better} | "
+                f"{formula or '—'} | {M.explain_metric(metric)} |"
+            )
+        lines.append("")
+
+    if run.pipeline is not None and run.pipeline.active_steps:
+        leakage = run.pipeline.leakage_report()
+        lines += [
+            "**Where each preprocessing step was fitted**",
+            "",
+            "| Step | Applies to | Fitted |",
+            "| --- | --- | --- |",
+        ]
+        for step in run.pipeline.active_steps:
+            where = ("before the split (changes which rows exist)" if step.spec.scope == "row"
+                     else "inside each fold" if not step.spec.leakage_safe
+                     else "inside each fold (learns nothing, so it could not leak anyway)")
+            lines.append(f"| {step.spec.name} | {_step_scope(step)} | {where} |")
+        lines += ["", leakage["explanation"], ""]
+
+    return "\n".join(lines)
+
+
+def _step_scope(step: Any) -> str:
+    if not step.columns:
+        return "all applicable columns"
+    if isinstance(step.columns, str):
+        return str(step.columns)
+    listed = ", ".join(f"`{c}`" for c in step.columns[:6])
+    return listed + (f" and {len(step.columns) - 6} more" if len(step.columns) > 6 else "")
+
+
+def _calculations_section(run: Any) -> str:
+    """The numbers behind every reported figure, fold by fold.
+
+    A cross-validated score is an average of numbers nobody normally sees. Shown,
+    they answer the question the average cannot: was the model consistently
+    decent, or brilliant on one fold and useless on another?
+    """
+    if not run.results:
+        return ""
+    lines: list[str] = []
+    successful = [r for r in run.results if r.status == "success"]
+    if not successful:
+        return "No model completed, so there is nothing to show the arithmetic for."
+
+    primary = run.plan.primary_metric if run.plan else None
+    lines += [
+        "**Fold-by-fold scores**",
+        "",
+        "Each model's score on every cross-validation fold, and the mean those folds produce. "
+        "A wide spread across folds means the reported average is not a reliable estimate of how "
+        "the model will do on new data, however good that average looks.",
+        "",
+    ]
+
+    for result in successful:
+        folds = result.validation.fold_scores.get(primary or "", []) if primary else []
+        if not folds:
+            continue
+        mean = result.validation.mean_scores.get(primary, float("nan"))
+        std = result.validation.std_scores.get(primary, float("nan"))
+        header = "| Model | " + " | ".join(f"Fold {i + 1}" for i in range(len(folds))) + \
+                 " | Mean | Std | Spread |"
+        if header not in lines:
+            lines += [header, "| --- | " + " | ".join("---:" for _ in folds) + " | ---: | ---: | ---: |"]
+        spread = (max(folds) - min(folds)) if folds else 0.0
+        cells = " | ".join(human_number(v) for v in folds)
+        lines.append(
+            f"| {result.model_name} | {cells} | **{human_number(mean)}** | "
+            f"{human_number(std)} | {human_number(spread)} |"
+        )
+    lines += [
+        "",
+        f"The mean is the plain arithmetic mean of the fold scores: "
+        f"(fold 1 + … + fold n) ÷ n. It is reported for {primary or 'the primary metric'}, "
+        "which is what the comparison was ranked on.",
+        "",
+    ]
+
+    lines += [
+        "**Training against held-out performance**",
+        "",
+        "The gap between them is the whole question of whether a model has learned the data or "
+        "memorised it.",
+        "",
+        f"| Model | Training {primary or ''} | Held-out {primary or ''} | Raw difference | "
+        "Relative gap | Reading |",
+        "| --- | ---: | ---: | ---: | ---: | --- |",
+    ]
+    for result in successful:
+        train = result.train_scores.get(primary) if primary else None
+        test = result.test_scores.get(primary) if primary else None
+        raw = (abs(test - train) if isinstance(train, (int, float))
+               and isinstance(test, (int, float)) else None)
+        gap = result.overfitting_gap
+        reading = (
+            "—" if gap is None else
+            "memorising the training rows" if gap > 0.15 else
+            "some overfitting, watch it" if gap > 0.05 else
+            "generalising well"
+        )
+        lines.append(
+            f"| {result.model_name} | {human_number(train)} | {human_number(test)} | "
+            f"{human_number(raw)} | {human_number(gap)} | {reading} |"
+        )
+    lines += [
+        "",
+        "The **raw difference** is in the metric's own units. The **relative gap** is that "
+        "difference scaled so it is comparable across models and across metrics — it is what the "
+        "ranking uses, because a difference of 3,000 means something very different on a target "
+        "measured in thousands than on one measured in millions. A relative gap above 0.15 is the "
+        "threshold at which this platform calls a model overfitted.",
+        "",
+    ]
+
+    best = run.best
+    if best is not None and best.hyperparameters:
+        lines += [
+            f"**Hyper-parameters of the selected model ({best.model_name})**",
+            "",
+            "| Parameter | Value |",
+            "| --- | --- |",
+        ]
+        lines += [f"| `{k}` | `{v}` |" for k, v in sorted(best.hyperparameters.items())
+                  if v is not None]
+        lines.append("")
+
+    if run.tournament is not None and getattr(run.tournament, "weights", None):
+        weights = run.tournament.weights
+        lines += [
+            "**How the composite ranking was computed**",
+            "",
+            "The ranking is not the raw score. Each model's figures are normalised against the "
+            "field, then combined with these weights:",
+            "",
+            "| Component | Weight | What it measures |",
+            "| --- | ---: | --- |",
+            f"| Performance | {weights.get('performance', 0):.0%} | The primary metric on held-out rows |",
+            f"| Generalisation | {weights.get('generalisation', 0):.0%} | How small the train-to-test gap is |",
+            f"| Stability | {weights.get('stability', 0):.0%} | How little the score varies across folds |",
+            f"| Interpretability | {weights.get('interpretability', 0):.0%} | Whether the mechanism can be read |",
+            f"| Efficiency | {weights.get('efficiency', 0):.0%} | Training cost |",
+            "",
+            "A model that wins on the headline metric can therefore rank below one that is "
+            "marginally worse and far steadier. That is deliberate: the steadier one is the one "
+            "that will still work next quarter.",
+            "",
+        ]
+
+    if run.explanation is not None and run.explanation.importances:
+        lines += [
+            "**Feature importance, as numbers**",
+            "",
+            f"Method: {run.explanation.method}. {run.explanation.method_note}",
+            "",
+            "| Rank | Variable | Importance | ± std | Direction |",
+            "| ---: | --- | ---: | ---: | --- |",
+        ]
+        for item in run.explanation.top(20):
+            lines.append(
+                f"| {item.rank} | `{item.feature}` | {human_number(item.importance)} | "
+                f"{human_number(getattr(item, 'std', None))} | {item.direction or '—'} |"
+            )
+        lines.append("")
+
+    if run.explanation is not None and run.explanation.coefficients:
+        lines += [
+            "**Model coefficients**",
+            "",
+            "| Variable | Coefficient | Reading |",
+            "| --- | ---: | --- |",
+        ]
+        for row in run.explanation.coefficients[:25]:
+            lines.append(
+                f"| `{row.get('feature', '')}` | {human_number(row.get('coefficient'))} | "
+                f"{row.get('interpretation', '—')} |"
+            )
+        lines.append("")
+
+    if run.diagnostics.get("confusion"):
+        confusion = run.diagnostics["confusion"]
+        labels = confusion.get("labels", [])
+        matrix = confusion.get("matrix", [])
+        if labels and matrix:
+            lines += [
+                "**Confusion matrix (counts)**",
+                "",
+                "Rows are what actually happened; columns are what the model said.",
+                "",
+                "| Actual \\ Predicted | " + " | ".join(str(l) for l in labels) + " | Total |",
+                "| --- | " + " | ".join("---:" for _ in labels) + " | ---: |",
+            ]
+            for label, row in zip(labels, matrix):
+                lines.append(f"| **{label}** | " + " | ".join(f"{v:,}" for v in row) +
+                             f" | {sum(row):,} |")
+            lines.append("")
+
+    return "\n".join(lines)
+
+
+def _run_integrity_section(run: Any) -> str:
+    """Did it run smoothly — every step, its status, and how long it took.
+
+    The honest answer to "can I trust this" starts with whether anything went
+    wrong while producing it. A failure that is reported is a fact; a failure
+    that is quietly absent from the report is a problem.
+    """
+    lines: list[str] = []
+    events = list(getattr(run.trace, "events", []))
+    failures = [e for e in events if e.status == "failed"]
+    warnings = [e for e in events if e.status == "warning"]
+
+    verdict = (
+        "Every stage completed." if not failures and not warnings else
+        f"{len(failures)} stage(s) failed and {len(warnings)} raised a warning."
+        if failures else
+        f"Every stage completed, with {len(warnings)} warning(s) raised along the way."
+    )
+    lines += [
+        f"**{verdict}** The run took {run.duration_s:.1f}s in total and its status is "
+        f"`{run.status}`.",
+        "",
+    ]
+
+    if events:
+        lines += [
+            "| Stage | Status | Detail | Time |",
+            "| --- | --- | --- | ---: |",
+        ]
+        for event in events:
+            detail = (event.detail or "—").replace("|", "\\|")[:180]
+            timing = f"{event.elapsed_s:.2f}s" if event.elapsed_s else "—"
+            lines.append(f"| {event.step} | {event.status} | {detail} | {timing} |")
+        lines.append("")
+
+    attempted = run.results
+    if attempted:
+        succeeded = [r for r in attempted if r.status == "success"]
+        lines += [
+            f"**{len(succeeded)} of {len(attempted)} model(s) trained successfully.**",
+            "",
+        ]
+        broken = [r for r in attempted if r.status != "success"]
+        if broken:
+            lines += ["| Model | Status | What went wrong |", "| --- | --- | --- |"]
+            for result in broken:
+                lines.append(f"| {result.model_name} | {result.status} | "
+                             f"{(result.error or '—')[:200]} |")
+            lines += [
+                "",
+                "A model that failed is reported rather than hidden. Most failures here mean the "
+                "algorithm's requirements were not met by this data — too few rows, unencoded "
+                "categories, or values it cannot accept — not that the analysis is unsound.",
+                "",
+            ]
+
+    if run.self_check is not None:
+        checks = run.self_check.checks
+        passed = [c for c in checks if c.passed]
+        lines += [
+            f"**Self-check: {len(passed)} of {len(checks)} question(s) passed.**",
+            "",
+            "| Question | Result | What was found |",
+            "| --- | --- | --- |",
+        ]
+        for check in checks:
+            lines.append(
+                f"| {check.question} | {'pass' if check.passed else 'raised'} | "
+                f"{(check.detail or '—').replace('|', chr(92) + '|')[:200]} |"
+            )
+        lines.append("")
+        if run.self_check.blocking:
+            lines += ["**Blocking problems**", ""]
+            lines += [f"- {item}" for item in run.self_check.blocking]
+            lines.append("")
+
+    if run.warnings:
+        lines += ["**Warnings raised during the run**", ""]
+        lines += [f"- {w}" for w in run.warnings[:20]]
+        lines.append("")
+
+    if run.environment:
+        lines += [
+            "**Environment**",
+            "",
+            "| Component | Version |",
+            "| --- | --- |",
+        ]
+        lines += [f"| {k} | {v} |" for k, v in sorted(run.environment.items())]
+        lines.append("")
+
     return "\n".join(lines)
 
 

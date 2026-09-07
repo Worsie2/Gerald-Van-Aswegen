@@ -69,20 +69,23 @@ def to_markdown(
     audience: str = "both",
     frame: pd.DataFrame | None = None,
     chart_files: dict[str, str] | None = None,
+    methodology: bool = False,
 ) -> str:
-    report = build_report(run, audience, frame=frame, include_charts=True)
+    report = build_report(run, audience, frame=frame, include_charts=True,
+                          include_methodology=methodology)
     return report.to_markdown(chart_files=chart_files)
 
 
 def to_html(run: Any, audience: str = "both", frame: pd.DataFrame | None = None,
-            charts: bool = True) -> str:
+            charts: bool = True, methodology: bool = False) -> str:
     """A single self-contained HTML file: text, tables and interactive charts.
 
     The Plotly runtime is inlined into the first chart rather than fetched from a
     CDN, so the report opens on a machine with no internet — which is often the
     machine a report is read on. That costs about 3 MB once, not per chart.
     """
-    report = build_report(run, audience, frame=frame, include_charts=charts)
+    report = build_report(run, audience, frame=frame, include_charts=charts,
+                          include_methodology=methodology)
     body = [f"<h1>{_html.escape(report.title)}</h1>",
             f'<p class="meta">Generated {_html.escape(report.generated_at)}</p>']
     if report.executive_summary:
@@ -406,7 +409,7 @@ def to_json(run: Any, path: str | Path | None = None) -> str:
 
 
 def to_pdf(run: Any, path: str | Path, audience: str = "both",
-           frame: pd.DataFrame | None = None) -> Path | None:
+           frame: pd.DataFrame | None = None, methodology: bool = False) -> Path | None:
     """PDF via reportlab if installed; otherwise write HTML and say so.
 
     A browser's "print to PDF" on the HTML output gives a better result than a
@@ -433,7 +436,7 @@ def to_pdf(run: Any, path: str | Path, audience: str = "both",
     from reportlab.lib.utils import ImageReader
     from reportlab.platypus import Image as PdfImage
 
-    report = build_report(run, audience, frame=frame)
+    report = build_report(run, audience, frame=frame, include_methodology=methodology)
     styles = getSampleStyleSheet()
     body_style = ParagraphStyle("Body", parent=styles["BodyText"], fontSize=9.5, leading=13.5, spaceAfter=6)
     heading_style = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=13, spaceBefore=14, spaceAfter=6)
@@ -543,6 +546,12 @@ def export_all(run: Any, directory: str | Path, data_path: str = "your_data.csv"
         ("html", f"{stem}.html", lambda p: p.write_text(to_html(run, frame=frame), encoding="utf-8")),
         ("business_summary", f"{stem}_business.md",
          lambda p: p.write_text(to_markdown(run, "business", frame=frame, chart_files=chart_files),
+                                encoding="utf-8")),
+        # The full-method version is written alongside rather than instead: most
+        # readers do not want it, and the one who does should not have to re-run
+        # the export to get it.
+        ("methodology", f"{stem}_methodology.html",
+         lambda p: p.write_text(to_html(run, "technical", frame=frame, methodology=True),
                                 encoding="utf-8")),
         ("json", f"{stem}.json", lambda p: to_json(run, p)),
         ("python", f"{stem}_reproduce.py", lambda p: to_python(run, p, data_path)),

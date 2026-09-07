@@ -10,9 +10,10 @@ from pathlib import Path
 import streamlit as st
 
 from dsai.app.components import (
-    apply_theme, caveat, chart, decision_panel, page_header, require_run, show_notices,
+    apply_theme, caveat, chart, dataframe, decision_panel, page_header, require_run, show_notices,
     sidebar_chrome,
 )
+from dsai.app.workings import learned_parameters
 from dsai.app.state import workspace
 from dsai.reporting.builder import build_report
 from dsai.reporting.exporters import (
@@ -46,13 +47,20 @@ audience = st.radio(
 )
 audience_key = {"Both audiences": "both", "Management": "business", "Technical": "technical"}[audience]
 
+methodology = st.checkbox(
+    "Include the methodology and the calculations",
+    value=False,
+    help="Adds three sections: how the analysis was run, the arithmetic behind every figure it "
+         "reports — fold by fold — and whether anything went wrong producing it.",
+)
+
 frame = state.typed_frame if state.typed_frame is not None else state.frame
 report = build_report(run, audience_key, state.context.currency,
-                      frame=frame, mode=state.theme)
+                      frame=frame, mode=state.theme, include_methodology=methodology)
 markdown = report.to_markdown()
 
-read_tab, charts_tab, decisions_tab, manifest_tab, export_tab = st.tabs(
-    ["Read", "Charts", "Decision log", "Reproducibility", "Export"]
+read_tab, charts_tab, method_tab, decisions_tab, manifest_tab, export_tab = st.tabs(
+    ["Read", "Charts", "Methodology & workings", "Decision log", "Reproducibility", "Export"]
 )
 
 with read_tab:
@@ -88,6 +96,38 @@ with charts_tab:
             chart(figure.figure, caption=figure.caption, key=f"report_chart_{figure.key}",
                   table=figure.table)
 
+with method_tab:
+    # Always available here regardless of the export toggle: a reader checking
+    # whether the analysis is sound should not have to change an export setting
+    # to see the workings.
+    st.caption(
+        "How it was run, the arithmetic behind every reported figure, and whether anything went "
+        "wrong on the way. Tick the box above to carry these into the exported report as well."
+    )
+    full = build_report(run, "technical", state.context.currency, frame=frame,
+                        mode=state.theme, include_charts=False, include_methodology=True)
+    wanted = ["Methodology", "The calculations", "Did it run cleanly"]
+    for heading in wanted:
+        body = dict(full.sections).get(heading, "")
+        if not body.strip():
+            continue
+        st.markdown(f"### {heading}")
+        st.markdown(body)
+        st.divider()
+
+    if state.pipeline is not None:
+        learned = learned_parameters(state.pipeline, frame)
+        if learned:
+            st.markdown("### What the preprocessing actually learned")
+            st.caption(
+                "The values each fitted step would use, computed here on the whole dataset so they "
+                "can be shown. The pipeline refits them inside every cross-validation fold, so the "
+                "numbers it uses in scoring come from training rows only and will differ slightly."
+            )
+            for title, table in learned:
+                st.markdown(f"**{title}**")
+                dataframe(table)
+
 with decisions_tab:
     st.caption(
         "Every decision the platform made, with its reason and what it set aside. This is a record "
@@ -115,7 +155,8 @@ with export_tab:
         use_container_width=True,
     )
     columns[1].download_button(
-        "HTML report", to_html(run, audience_key, frame=frame), file_name=f"{stem}.html",
+        "HTML report", to_html(run, audience_key, frame=frame, methodology=methodology),
+        file_name=f"{stem}.html",
         mime="text/html", use_container_width=True,
         help="Self-contained: text, tables and the charts, interactive, with no internet needed.",
     )
@@ -174,7 +215,8 @@ with export_tab:
 
         with tempfile.TemporaryDirectory() as directory:
             try:
-                pdf = to_pdf(run, Path(directory) / f"{stem}.pdf", audience_key, frame=frame)
+                pdf = to_pdf(run, Path(directory) / f"{stem}.pdf", audience_key, frame=frame,
+                             methodology=methodology)
                 st.download_button(
                     "PDF report", Path(pdf).read_bytes(), file_name=f"{stem}.pdf",
                     mime="application/pdf", use_container_width=True,

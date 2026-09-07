@@ -233,6 +233,33 @@ def _register_all() -> None:
             params=[_p("fill_value", "text", "__missing__", description="Value to insert.")],
         ),
         StepSpec(
+            key="impute_by_group",
+            name="Impute within a group",
+            category="imputation",
+            description="Fill gaps with the statistic of the row's own group — the mean spend of "
+                        "its region rather than the mean spend of everyone.",
+            builder=lambda columns=None, group_by="", strategy="median", **_: T.GroupImputer(
+                columns=columns, group_by=group_by, strategy=strategy
+            ),
+            applies_to=NUMERIC,
+            leakage_safe=False,
+            when_to_use="When a grouping column explains much of the variation in the column with "
+                        "gaps — region, segment, product line, customer tier.",
+            caveats=[
+                "A group present only in the test fold has no learned statistic and falls back to "
+                "the overall training statistic",
+                "A group with very few rows gives a statistic that is barely better than a guess",
+                "Still shrinks variance within each group",
+            ],
+            params=[
+                _p("group_by", "categorical", None,
+                   description="The column whose groups the statistic is computed within."),
+                _p("strategy", "categorical", "median",
+                   choices=["median", "mean", "most_frequent"],
+                   description="Which statistic to compute inside each group."),
+            ],
+        ),
+        StepSpec(
             key="impute_knn",
             name="KNN imputation",
             category="imputation",

@@ -11,13 +11,37 @@ from dsai.app.components import (
     metric_row, override_notice, page_header, pipeline_graph, require_data, show_notices,
     sidebar_chrome, workflow_nav,
 )
-from dsai.viz import plots
+from dsai.app.imputation import (
+    STRATEGIES as IMPUTATION_STRATEGIES, Choice, preview_fill, steps_for_choices, strategies_for,
+)
 from dsai.app.state import workspace
-from dsai.core.schema import Objective, TaskType
+from dsai.viz import plots
+from dsai.core.schema import Objective, SemanticType, TaskType
 from dsai.preprocessing.pipeline import PreprocessingPipeline
 from dsai.preprocessing.recommender import recommend_pipeline
 from dsai.preprocessing.steps import STEPS
 from dsai.registry.base import REGISTRY
+
+
+
+def _suggested_strategy(column, options: list[str]) -> str:
+    """What the platform would pick, offered as the default rather than imposed.
+
+    Mirrors the reasoning in the preprocessing recommender: a column that is
+    mostly absent is worth removing, a skewed one wants the median, a symmetric
+    one can take the mean, and a categorical one takes its commonest value.
+    """
+    if column.missing_pct > 60 and "Drop the column" in options:
+        return "Drop the column"
+    if "Median of the column" in options:
+        skew = abs(column.skewness) if column.skewness is not None else 0.0
+        if skew < 0.5 and "Mean of the column" in options:
+            return "Mean of the column"
+        return "Median of the column"
+    if "Most frequent value" in options:
+        return "Most frequent value"
+    return options[0]
+
 
 state = workspace()
 apply_theme(state.theme)
@@ -136,8 +160,9 @@ if delete.button("Delete", disabled=len(names) < 2, use_container_width=True):
     state.remove_pipeline(state.active_pipeline)
     st.rerun()
 
-build_tab, graph_tab, edit_tab, preview_tab, effect_tab, compare_tab, saved_tab = st.tabs(
-    ["Build", "The pipeline", "Edit steps", "Preview effect", "What it changed",
+(build_tab, missing_tab, graph_tab, edit_tab, preview_tab, effect_tab, compare_tab,
+ saved_tab) = st.tabs(
+    ["Build", "Missing values", "The pipeline", "Edit steps", "Preview effect", "What it changed",
      "Compare pipelines", "Saved pipelines"]
 )
 
@@ -179,6 +204,121 @@ with build_tab:
         decision_panel(decisions)
 
 pipeline = state.pipeline
+
+with missing_tab:
+    # One decision per column, rather than one strategy applied to a multiselect.
+    # Which column has gaps, how many, and what filling them would actually put
+    # there are all different questions, and a reader needs all three to choose.
+    gappy = [(name, column) for name, column in profile.columns.items() if column.n_missing]
+    if not gappy:
+        empty_state(
+            "No column has a missing value",
+            "Nothing to decide here. Imputation steps can still be added by hand on the "
+            "**Build** tab if you expect gaps in data you will score later.",
+        )
+    else:
+        ai_panel(
+            f"**{len(gappy)} column(s)** have gaps. Below, each one gets its own decision — the "
+            "column median, the mean *within a group* like region or tier, a fixed value, or "
+            "dropping it. The number each choice would insert is shown beside it, so you can "
+            "judge the choice rather than take it on trust.",
+            heading="AI Analyst · missing values",
+            why="A single strategy across every column is almost never right. A skewed column and "
+                "a symmetric one want different statistics, and a column that is mostly absent "
+                "usually wants removing rather than inventing.",
+        )
+        caveat(
+            "The values previewed here are computed on the whole dataset so they can be shown. "
+            "The pipeline itself refits its imputers inside each cross-validation fold, so the "
+            "numbers it actually uses come from training rows only and will differ slightly. "
+            "That is the point — it is what stops a test row informing its own imputation."
+        )
+
+        grouping_columns = [
+            name for name, column in profile.columns.items()
+            if column.semantic_type in (SemanticType.CATEGORICAL_NOMINAL,
+                                        SemanticType.CATEGORICAL_ORDINAL,
+                                        SemanticType.BINARY)
+            and 1 < column.n_unique <= 50
+        ]
+
+        choices: list[Choice] = []
+        for name, column in sorted(gappy, key=lambda item: -item[1].missing_pct):
+            with st.container(border=True):
+                head, control = st.columns([2, 3])
+                with head:
+                    st.markdown(
+                        f'<div class="dsai-colcard-name">{name}</div>'
+                        f'<div class="dsai-meta">{column.semantic_type.value.replace("_", " ")}</div>'
+                        f'<div style="font-size:.8125rem;color:var(--ink-2)">'
+                        f"<strong>{column.n_missing:,}</strong> missing "
+                        f"({column.missing_pct:.1f}% of rows)</div>",
+                        unsafe_allow_html=True,
+                    )
+                    if column.missing_pct > 40:
+                        caveat("More than 40% absent. Imputing this invents most of the column.")
+
+                with control:
+                    options = strategies_for(column.semantic_type)
+                    default = _suggested_strategy(column, options)
+                    strategy = st.selectbox(
+                        "Fill the gaps with", options, index=options.index(default),
+                        key=f"imp_{name}",
+                        help=IMPUTATION_STRATEGIES[default]["note"],
+                    )
+                    spec = IMPUTATION_STRATEGIES[strategy]
+                    st.caption(spec["note"])
+
+                    group_by = None
+                    fill_value = ""
+                    if spec.get("needs_group"):
+                        if grouping_columns:
+                            group_by = st.selectbox(
+                                "Group by", grouping_columns, key=f"impg_{name}",
+                                help="The statistic is computed inside each of this column's groups.",
+                            )
+                        else:
+                            caveat("No categorical column with a usable number of groups, so there "
+                                   "is nothing to group by.")
+                    if spec.get("needs_value"):
+                        fill_value = st.text_input(
+                            "Value to insert", "__missing__", key=f"impv_{name}",
+                            help="Kept as its own level, so a model can learn from the absence.",
+                        )
+
+                choice = Choice(name, strategy, group_by, fill_value)
+                choices.append(choice)
+
+                summary, table = preview_fill(frame, choice)
+                st.markdown(
+                    f'<div class="dsai-caveat"><span class="dsai-caveat-label">Would insert</span>'
+                    f"{summary}</div>",
+                    unsafe_allow_html=True,
+                )
+                if table is not None and not table.empty:
+                    with st.expander(f"The {len(table)} group value(s) this would use"):
+                        dataframe(table)
+
+        st.divider()
+        planned = steps_for_choices(choices)
+        acting = [c for c in choices if c.is_action]
+        left, right = st.columns([3, 2])
+        left.markdown(
+            f"**{len(acting)} of {len(choices)} column(s)** would be changed, as "
+            f"**{len(planned)} pipeline step(s)** — identical choices are merged into one step so "
+            "the pipeline stays readable."
+        )
+        if right.button("Add these to the pipeline", type="primary", disabled=not planned,
+                        use_container_width=True):
+            if pipeline is None:
+                state.add_pipeline("missing values", PreprocessingPipeline(name="missing values"))
+                pipeline = state.pipeline
+            for step in planned:
+                pipeline.add(step["step_key"], columns=step["columns"], by="user",
+                             note="chosen per column on the Missing values tab", **step["params"])
+            state.notify("success", f"Added {len(planned)} imputation step(s) to "
+                                    f"'{state.active_pipeline}'.")
+            st.rerun()
 
 with graph_tab:
     if pipeline is None:
@@ -313,6 +453,19 @@ with edit_tab:
                 params[param.name] = st.selectbox(param.name, param.choices,
                                                   help=param.description or None,
                                                   key=f"p_{step_key}_{param.name}")
+            elif param.kind == "categorical":
+                # A categorical parameter with no fixed choices names a column,
+                # so the dataset's own columns are the choices.
+                picked = st.selectbox(
+                    param.name, ["— none —"] + list(profile.columns),
+                    help=param.description or None, key=f"p_{step_key}_{param.name}",
+                )
+                params[param.name] = None if picked.startswith("—") else picked
+            elif param.kind == "text":
+                params[param.name] = st.text_input(
+                    param.name, str(param.default or ""),
+                    help=param.description or None, key=f"p_{step_key}_{param.name}",
+                )
         if st.button("Add step", type="primary"):
             pipeline.add(step_key, columns=target_columns or None, by="user", **params)
             state.notify("success", f"Added {spec.name}.")
