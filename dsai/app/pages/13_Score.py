@@ -82,6 +82,14 @@ source_tab, holdout_tab = st.tabs(["Upload a file", "Re-score the loaded dataset
 new_frame: pd.DataFrame | None = None
 label = ""
 
+# Which of the two sources is active. A plain "was the button ever clicked"
+# flag would latch forever once True, silently ignoring every later upload —
+# so this only switches mode on a genuinely new event: a fresh upload (by
+# file_id, since Streamlit keeps returning the same uploaded file on every
+# rerun) or a fresh click of the holdout button.
+if "_score_mode" not in st.session_state:
+    st.session_state["_score_mode"] = None
+
 with source_tab:
     uploaded = st.file_uploader(
         "CSV, Excel, JSON, JSONL, Parquet or Feather",
@@ -89,17 +97,22 @@ with source_tab:
         key="_score_upload",
     )
     if uploaded is not None:
+        if st.session_state.get("_score_upload_id") != uploaded.file_id:
+            st.session_state["_score_upload_id"] = uploaded.file_id
+            st.session_state["_score_mode"] = "upload"
         try:
             loaded, _ = load_dataset(uploaded, name=uploaded.name)
-            new_frame, label = loaded, uploaded.name
             st.success(f"Read {len(loaded):,} rows and {loaded.shape[1]} columns from {uploaded.name}.")
         except Exception as exc:
+            loaded = None
             error_state(
                 "That file could not be read",
                 f"{type(exc).__name__}: {exc}",
                 "Check the file opens in a spreadsheet, that the first row holds column names, and "
                 "that the separator is a comma or a tab.",
             )
+    else:
+        loaded = None
 
 with holdout_tab:
     st.caption(
@@ -107,9 +120,12 @@ with holdout_tab:
         "every row, and for seeing the model's output beside the actual values it was scored on."
     )
     if st.button("Score the loaded dataset", width='stretch'):
-        st.session_state["_score_self"] = True
-    if st.session_state.get("_score_self"):
-        new_frame, label = (state.frame, state.dataset_name)
+        st.session_state["_score_mode"] = "holdout"
+
+if st.session_state["_score_mode"] == "holdout":
+    new_frame, label = (state.frame, state.dataset_name)
+elif st.session_state["_score_mode"] == "upload" and loaded is not None:
+    new_frame, label = loaded, uploaded.name
 
 if new_frame is None:
     st.info("Upload a file above, or score the dataset already loaded, to see predictions.")

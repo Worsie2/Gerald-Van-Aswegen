@@ -412,7 +412,22 @@ def _plan_model(intent, text, profile, last_run, context) -> Intent:
             break
     target = target or (context.target_variable if context else None)
     if target is None and profile.target_candidates:
-        target = profile.target_candidates[0]["column"]
+        # No column was named, so the target is being guessed. If the request
+        # itself names a task ("regression", "classify"), prefer a candidate
+        # that actually is one — picking the top-ranked candidate regardless
+        # can hand back a classification objective for a question that
+        # explicitly asked for regression, or the reverse.
+        wants: set[str] = set()
+        if re.search(r"\bregress", text, re.IGNORECASE):
+            wants = {"regression"}
+        elif re.search(r"\bclassif", text, re.IGNORECASE):
+            wants = {"binary_classification", "multiclass_classification"}
+        if wants:
+            for candidate in profile.target_candidates:
+                if candidate["implied_task"] in wants:
+                    target = candidate["column"]
+                    break
+        target = target or profile.target_candidates[0]["column"]
 
     if target is None:
         intent.clarification = "Which column should be predicted?"

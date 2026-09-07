@@ -59,6 +59,22 @@ def test_column_names_are_matched_by_stem(question_frame):
     assert intent.target == "churned"
 
 
+def test_naming_the_task_picks_a_target_that_actually_is_one(question_frame):
+    """No column is named, so the target is guessed from the profiler's ranked
+    candidates. Without the fix this ignores the word 'regression' entirely and
+    can hand back a classification objective (if a binary column such as
+    'churned' ranks first) for a question that explicitly asked for regression,
+    or the reverse."""
+    profile, _ = profile_dataset(question_frame)
+
+    regression = parse_command("try every suitable regression model", profile)
+    assert regression.task_type is TaskType.REGRESSION
+    assert profile.columns[regression.target].is_numeric
+
+    classification = parse_command("try every suitable classification model", profile)
+    assert classification.task_type in (TaskType.BINARY_CLASSIFICATION, TaskType.MULTICLASS_CLASSIFICATION)
+
+
 def test_named_models_are_filtered_to_the_task(question_frame):
     profile, _ = profile_dataset(question_frame)
     intent = parse_command("predict annual spend with random forest", profile)

@@ -213,6 +213,29 @@ def load_file(
     return frame, source
 
 
+def _extra_statements(query: str) -> bool:
+    """True if ``query`` holds more than one SQL statement.
+
+    Checking only the opening keyword lets ``SELECT 1; DROP TABLE x;`` through
+    unnoticed on any backend whose driver executes semicolon-separated
+    statements in one call (Postgres via psycopg2 does, by default). This
+    scans for a statement-separating ``;`` outside of quoted string literals,
+    ignoring one optional trailing ``;`` at the very end of the query.
+    """
+    body = query.strip()
+    if body.endswith(";"):
+        body = body[:-1]
+    in_single = in_double = False
+    for char in body:
+        if char == "'" and not in_double:
+            in_single = not in_single
+        elif char == '"' and not in_single:
+            in_double = not in_double
+        elif char == ";" and not in_single and not in_double:
+            return True
+    return False
+
+
 def load_sql(
     query: str,
     connection_string: str,
@@ -221,14 +244,20 @@ def load_sql(
 ) -> tuple[pd.DataFrame, DataSource]:
     """Run a read query against any SQLAlchemy-supported database.
 
-    Only SELECT/WITH statements are accepted — this platform reads data, it does
-    not modify the user's database.
+    Only a single SELECT/WITH statement is accepted — this platform reads
+    data, it does not modify the user's database.
     """
     stripped = query.strip().lstrip("(").lstrip()
     if not stripped.lower().startswith(("select", "with", "show", "pragma", "describe")):
         raise LoadError(
             "Only read queries are allowed here (SELECT / WITH). "
             "Run any data-modifying statement in your own database client."
+        )
+    if _extra_statements(query):
+        raise LoadError(
+            "Only a single statement is allowed here. Remove anything after the "
+            "first query — chaining statements with ';' is not permitted, even "
+            "read-only ones, since some database drivers will run all of them."
         )
     try:
         from sqlalchemy import create_engine, text
