@@ -7,8 +7,12 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from dsai.app.components import apply_theme, caveat, sidebar_chrome, dataframe, page_header, show_notices
+from dsai.app.components import (
+    ai_panel, apply_theme, caveat, dataframe, empty_state, error_state, page_header,
+    show_notices, sidebar_chrome,
+)
 from dsai.app.state import workspace
+from dsai.engines.compare import compare_runs
 from dsai.repro.project import Project, list_projects
 
 state = workspace()
@@ -25,7 +29,9 @@ page_header(
 root = st.text_input("Projects folder", value=str(Path.home() / "dsai_projects"))
 root_path = Path(root)
 
-create_tab, open_tab, runs_tab = st.tabs(["Save current work", "Open a project", "Run history"])
+create_tab, open_tab, runs_tab, compare_tab = st.tabs(
+    ["Save current work", "Open a project", "Run history", "Compare two runs"]
+)
 
 with create_tab:
     if not state.has_data:
@@ -66,12 +72,11 @@ with open_tab:
         if st.button("Open", type="primary"):
             try:
                 project = Project.open(chosen)
-                state.frame = project.data()
+                # Opening a project is loading a dataset: everything derived
+                # from whatever was open before has to go with it.
+                state.set_dataset(project.data(), None, project.meta.name)
                 state.context = project.context()
-                state.dataset_name = project.meta.name
                 state.project_path = chosen
-                state.profile = None
-                state.reset_analysis()
                 state.notify("success", f"Opened '{project.meta.name}'.")
                 st.rerun()
             except Exception as exc:
@@ -110,4 +115,77 @@ columns = st.columns(4)
 columns[0].metric("Dataset", state.dataset_name or "—")
 columns[1].metric("Rows", f"{len(state.frame):,}" if state.has_data else "—")
 columns[2].metric("Runs this session", len(state.runs))
+with compare_tab:
+    # Changing one preprocessing choice and re-running tells you nothing unless
+    # you can see what it did. This is that.
+    if len(state.runs) < 2:
+        empty_state(
+            "Two runs are needed to compare anything",
+            f"This session has **{len(state.runs)}**. Run the analysis again with something "
+            "changed — a different objective, another pipeline, a longer time budget — and both "
+            "will appear here.",
+            actions=[("Back to the analysis", "pages/4_Analysis.py")],
+        )
+    else:
+        def _label(index: int) -> str:
+            run = state.runs[index]
+            question = run.objective.label().replace("_", " ") if run.objective else "no objective"
+            model = run.best.model_name if run.best else "no model"
+            return f"{index + 1}. {question} · {model} · {run.duration_s:.0f}s"
+
+        picker = st.columns(2)
+        a_index = picker[0].selectbox("Run A (the earlier one)", range(len(state.runs)),
+                                      index=len(state.runs) - 2, format_func=_label)
+        b_index = picker[1].selectbox("Run B (what you changed to)", range(len(state.runs)),
+                                      index=len(state.runs) - 1, format_func=_label)
+        if a_index == b_index:
+            caveat("Both selections are the same run. Pick two different ones.")
+        else:
+            diff = compare_runs(state.runs[a_index], state.runs[b_index])
+
+            if diff.comparable:
+                ai_panel(diff.verdict, heading="AI Analyst · what changed",
+                         why="A difference smaller than the fold-to-fold spread within a single "
+                             "run is not a difference — re-running either one with a different "
+                             "seed could reverse it. That comparison is made before any verdict "
+                             "is given.")
+            else:
+                error_state("These two runs cannot be compared on score", diff.reason,
+                            "The setup and preprocessing below can still be compared — they just "
+                            "do not add up to one being better than the other.")
+            for note in diff.caveats:
+                caveat(note)
+
+            setup_view, score_view, steps_view, findings_view = st.tabs(
+                ["Setup", "Scores", "Preprocessing", "Findings"]
+            )
+            with setup_view:
+                st.caption("Everything that defined each run. The Changed column is the answer to "
+                           "'what did I actually alter?'")
+                dataframe(diff.setup)
+            with score_view:
+                if diff.scores.empty:
+                    st.info("No comparable scores between these two runs.")
+                else:
+                    dataframe(diff.scores)
+                    st.caption(
+                        "Difference is B minus A in the metric's own units. Whether that counts as "
+                        "better depends on the metric — the last column says which."
+                    )
+            with steps_view:
+                if diff.preprocessing.empty:
+                    st.info("Neither run recorded a pipeline.")
+                else:
+                    dataframe(diff.preprocessing)
+            with findings_view:
+                if diff.findings.empty:
+                    st.info("Neither run produced findings.")
+                else:
+                    st.caption(
+                        "A finding that appears in one run and not the other is worth more "
+                        "attention than one that survives both — it is the part of the conclusion "
+                        "that depends on what you changed."
+                    )
+                    dataframe(diff.findings)
+
 columns[3].metric("Project", Path(state.project_path).name if state.project_path else "unsaved")

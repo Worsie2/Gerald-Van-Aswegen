@@ -140,6 +140,13 @@ with decisions_tab:
 with manifest_tab:
     manifest = build_manifest(run)
     st.code(manifest.render(), language=None)
+    st.download_button(
+        "Manifest (.json)", manifest.to_json(), file_name=f"{run.dataset_name}_{run.id}_manifest.json",
+        mime="application/json",
+        help="The machine-readable record: dataset fingerprint, objective, preprocessing, "
+             "validation strategy, seed, model and library versions. Enough to tell whether two "
+             "results came from the same analysis.",
+    )
     st.caption(
         f"Fingerprint `{manifest.fingerprint()}` is a hash over the dataset, objective, "
         "preprocessing, validation strategy, seed and model. Two runs with the same fingerprint "

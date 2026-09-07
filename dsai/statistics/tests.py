@@ -279,18 +279,25 @@ def wilcoxon_signed_rank(before: Any, after: Any, alpha: float = ALPHA) -> TestR
                           conclusion="Need at least five complete pairs.")
     a, b = joined.iloc[:, 0].astype(float), joined.iloc[:, 1].astype(float)
     statistic, p_value = stats.wilcoxon(a, b)
-    differences = a - b
+    # after minus before, which is what "change" means to anyone reading it.
+    # Computed the other way round, a fall reads as a rise — the p-value is the
+    # same either way, so the mistake is invisible in everything but the wording.
+    differences = b - a
     effect = float(abs(np.mean(differences)) / max(np.std(differences, ddof=1), 1e-12))
+    median = float(differences.median())
     result = TestResult(
         test="Wilcoxon signed-rank test", statistic=float(statistic), p_value=float(p_value),
         significant=bool(p_value < alpha), alpha=alpha, n=len(joined),
         effect_size=effect, effect_size_name="standardised median shift",
         effect_interpretation=interpret_cohens_d(effect),
         null_hypothesis="The paired differences are centred on zero",
-        detail={"median_difference": float(differences.median()), "n_pairs": len(joined)},
+        detail={"median_difference": median, "n_pairs": len(joined),
+                "direction": "increase" if median > 0 else "decrease" if median < 0 else "no change"},
     )
+    direction = ("a rise of" if median > 0 else "a fall of" if median < 0 else "a change of")
     result.conclusion = (
-        f"Median paired change of {result.detail['median_difference']:,.4g}. "
+        f"Median paired change: {direction} {abs(median):,.4g} from the first measure to the "
+        f"second, across {len(joined):,} pairs. "
         + ("Significant." if result.significant else "Not significant.")
     )
     result.practical_note = _practical_note(result.n, result.significant, effect, 0.2)

@@ -126,10 +126,14 @@ if submitted:
         currency=currency.strip() or "ZAR",
         stated_objective=stated_objective.strip(),
     )
+    # Reset first: it clears the objectives, so computing them before it would
+    # throw the new ones away and leave the page showing nothing.
+    state.reset_analysis()
     apply_user_overrides(state.profile, state.context)
     state.objectives = detect_objectives(state.profile, state.context)
-    state.reset_analysis()
-    state.notify("success", "Context saved. The suggested objectives below have been updated.")
+    state.notify("success", "Context saved. The suggested objectives below have been updated. "
+                            "Anything already analysed was cleared — it was answering the old "
+                            "question.")
     st.rerun()
 
 st.divider()

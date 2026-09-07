@@ -621,16 +621,15 @@ class ExperimentEngine:
         return out
 
     def environment(self) -> dict[str, str]:
-        """Library versions, recorded so a result can be reproduced later."""
-        import sklearn
+        """Library versions, recorded so a result can be reproduced later.
 
-        return {
-            "python": platform.python_version(),
-            "platform": platform.platform(),
-            "numpy": np.__version__,
-            "pandas": pd.__version__,
-            "scikit_learn": sklearn.__version__,
-        }
+        Delegates rather than listing five packages of its own: the manifest
+        already records the fuller set, and two lists of "the versions that
+        matter" that disagree is how a reproducibility record stops being one.
+        """
+        from dsai.repro.provenance import environment_snapshot
+
+        return environment_snapshot()
 
 
 def _infer_season(series: pd.Series) -> int | None:

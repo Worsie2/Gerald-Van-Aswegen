@@ -5,12 +5,12 @@ from __future__ import annotations
 import streamlit as st
 
 from dsai.app.components import (
-    ai_panel, apply_theme, caveat, chart, column_card, dataframe, hero, metric_row,
+    ai_panel, apply_theme, caveat, chart, column_card, dataframe, error_state, hero, metric_row,
     override_notice, page_header, quality_bars, quality_issues, show_notices, sidebar_chrome,
     workflow_nav,
 )
 from dsai.app.quality import quality_breakdown
-from dsai.app.state import scientist, workspace
+from dsai.app.state import workspace
 from dsai.viz import plots
 
 
@@ -53,9 +53,38 @@ def column_notes(column, profile) -> list[str]:
         if suspect.get("column") == column.name:
             notes.append(f"**Possible leakage.** {suspect.get('reason', '')}")
     return notes
-from dsai.core.profiler import override_semantic_type
 from dsai.core.schema import SemanticType
 from dsai.dataio.loaders import LoadError, excel_sheet_names, list_sql_tables, load_file, load_sql
+
+
+#: Above this, reading and profiling stops feeling instant, and the interface
+#: freezes while it happens — so it is worth saying so before it starts.
+LARGE_FILE_MB = 50
+
+#: Above this many rows the platform offers to work on a sample. Not a cap: the
+#: full dataset is always available, but a first pass on a sample answers "is
+#: this analysis worth running" in seconds rather than minutes.
+SAMPLE_THRESHOLD_ROWS = 250_000
+SAMPLE_SIZE_ROWS = 100_000
+
+
+def _offer_sample(frame, name: str):
+    """Take a random sample of a very large frame, and say so.
+
+    Sampled at random rather than by taking the first N rows: files are often
+    sorted, and the first hundred thousand rows of a file sorted by date are a
+    different population from the file.
+    """
+    if len(frame) <= SAMPLE_THRESHOLD_ROWS:
+        return frame, ""
+    if not st.session_state.get("_sample_large_files", True):
+        return frame, ""
+    sampled = frame.sample(SAMPLE_SIZE_ROWS, random_state=42).sort_index()
+    return sampled, (
+        f"Sampled {SAMPLE_SIZE_ROWS:,} rows at random from {len(frame):,} — turn that off below "
+        "to work on all of them."
+    )
+
 
 state = workspace()
 apply_theme(state.theme)
@@ -72,6 +101,15 @@ with file_tab:
         "CSV, Excel, JSON, JSONL, Parquet or Feather",
         type=["csv", "tsv", "txt", "xlsx", "xlsm", "xls", "json", "jsonl", "parquet", "feather"],
     )
+    st.checkbox(
+        f"Work on a {SAMPLE_SIZE_ROWS:,}-row sample when a file has more than "
+        f"{SAMPLE_THRESHOLD_ROWS:,} rows",
+        value=True, key="_sample_large_files",
+        help="A first pass on a sample answers 'is this analysis worth running' in seconds. "
+             "Turn it off to load everything — the platform will use all of it, it will just "
+             "take proportionally longer.",
+    )
+
     sheet = None
     if uploaded is not None and uploaded.name.lower().endswith((".xlsx", ".xlsm", ".xls")):
         try:
@@ -79,16 +117,46 @@ with file_tab:
             sheet = st.selectbox("Sheet", sheets) if len(sheets) > 1 else sheets[0]
         except Exception:
             sheet = None
+    if uploaded is not None:
+        size_mb = getattr(uploaded, "size", 0) / 1_048_576
+        if size_mb > LARGE_FILE_MB:
+            caveat(
+                f"This file is {size_mb:.0f} MB. Profiling and training on all of it will take a "
+                "while and the interface will not respond during it. Working on a sample first is "
+                "usually the faster way to find out whether the analysis is worth running on "
+                "everything.",
+                label="Large file",
+            )
+
     if uploaded is not None and st.button("Load this file", type="primary"):
         try:
-            frame, source = load_file(uploaded, name=uploaded.name, sheet=sheet)
-            state.frame, state.source = frame, source
-            state.dataset_name = uploaded.name
-            state.reset_analysis()
-            state.notify("success", f"Loaded {len(frame):,} rows × {frame.shape[1]} columns.")
+            with st.spinner(f"Reading {uploaded.name}…"):
+                frame, source = load_file(uploaded, name=uploaded.name, sheet=sheet)
+            frame, sampled = _offer_sample(frame, uploaded.name)
+            state.set_dataset(frame, source, uploaded.name)
+            state.notify(
+                "success",
+                f"Loaded {len(frame):,} rows × {frame.shape[1]} columns."
+                + (f" {sampled}" if sampled else "")
+                + " Anything from the previous dataset has been cleared.",
+            )
             st.rerun()
         except LoadError as exc:
-            st.error(str(exc))
+            error_state(
+                "That file could not be read",
+                str(exc),
+                "Check it opens in a spreadsheet, that the first row holds column names, and that "
+                "the separator is a comma or a tab. For Excel, make sure the sheet you want is "
+                "the one selected above.",
+            )
+        except MemoryError:
+            error_state(
+                "There is not enough memory to hold this file",
+                f"{uploaded.name} is larger than this machine can load into memory at once.",
+                "Take a sample of it first — a few hundred thousand rows is more than enough to "
+                "decide what analysis is worth running — or load it from a database with a "
+                "`LIMIT` on the query.",
+            )
 
 with sql_tab:
     st.caption("Read-only. Only SELECT and WITH statements are accepted.")
@@ -103,9 +171,7 @@ with sql_tab:
     if connection and query and st.button("Run query", type="primary"):
         try:
             frame, source = load_sql(query, connection)
-            state.frame, state.source = frame, source
-            state.dataset_name = "sql_query"
-            state.reset_analysis()
+            state.set_dataset(frame, source, "sql_query")
             state.notify("success", f"Loaded {len(frame):,} rows from the database.")
             st.rerun()
         except LoadError as exc:
@@ -119,9 +185,7 @@ with sample_tab:
     st.info(SAMPLES[choice]["description"])
     if st.button("Load sample", type="primary"):
         frame, source = build_sample(choice)
-        state.frame, state.source = frame, source
-        state.dataset_name = choice
-        state.reset_analysis()
+        state.set_dataset(frame, source, choice)
         state.notify("success", f"Loaded the {SAMPLES[choice]['label']} sample.")
         st.rerun()
 
@@ -135,12 +199,7 @@ st.divider()
 # --------------------------------------------------------------------------
 if state.profile is None:
     with st.spinner("Profiling the dataset…"):
-        run = scientist().understand(
-            state.frame, state.dataset_name, state.context, state.source
-        )
-        state.profile = run.profile
-        state.typed_frame = scientist()._typed_frame
-        state.objectives = run.objectives
+        state.profile_dataset()
 
 profile = state.profile
 st.subheader("Dataset intelligence report")
@@ -200,9 +259,16 @@ with types_tab:
             format_func=lambda t: t.value.replace("_", " "),
         )
         if st.button("Apply correction") and new_type is not current:
-            override_semantic_type(profile, column_name, new_type)
-            state.reset_analysis()
-            state.notify("success", f"'{column_name}' is now treated as {new_type.value.replace('_', ' ')}.")
+            # Recorded on the workspace, not only on the profile: re-profiling
+            # after a context change would otherwise quietly overrule the user.
+            state.type_overrides[column_name] = new_type
+            state.reset_analysis(reprofile=True)
+            state.notify(
+                "success",
+                f"'{column_name}' is now treated as {new_type.value.replace('_', ' ')}. "
+                "Anything already analysed has been cleared, because that choice changes how "
+                "the column is preprocessed and modelled.",
+            )
             st.rerun()
 
 with quality_tab:

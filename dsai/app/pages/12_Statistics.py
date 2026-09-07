@@ -12,8 +12,8 @@ from dsai.app.components import (
 from dsai.app.state import workspace
 from dsai.statistics import tests as T
 from dsai.statistics.descriptive import (
-    correlation_pairs, describe_categorical, describe_numeric, group_summary, outlier_table,
-    percentiles, variance_inflation_factors,
+    correlation_matrix, correlation_pairs, describe_categorical, describe_numeric, group_summary,
+    outlier_table, percentiles, variance_inflation_factors,
 )
 from dsai.viz import plots
 
@@ -70,7 +70,66 @@ with describe_tab:
 
 # --------------------------------------------------------------------------
 with compare_tab:
-    if not numeric or not categorical:
+    # Two genuinely different questions live here, and running the wrong test is
+    # the classic way to get a confident wrong answer: independent groups
+    # (region A against region B) and paired measurements (the same rows, before
+    # and after). A paired test is far more powerful when the pairing is real,
+    # and invalid when it is not.
+    design = st.radio(
+        "What kind of comparison is this?",
+        ["Independent groups", "Paired measurements"],
+        horizontal=True,
+        captions=[
+            "Different rows in each group — one column splits them.",
+            "The same rows measured twice — two columns, row by row.",
+        ],
+        help="Pairing means row 1 in one column and row 1 in the other are the same subject. "
+             "If they are not, the paired test is invalid however similar the columns look.",
+    )
+
+    if design == "Paired measurements":
+        if len(numeric) < 2:
+            empty_state("Needs two numeric columns",
+                        "A paired comparison measures the same rows twice, so it needs two "
+                        "numeric columns to compare row by row.")
+        else:
+            pair = st.columns(3)
+            before = pair[0].selectbox("Before / first measure", numeric, key="pair_before")
+            after = pair[1].selectbox("After / second measure",
+                                      [c for c in numeric if c != before], key="pair_after")
+            alpha = pair[2].select_slider("Significance level (α)", [0.10, 0.05, 0.01],
+                                          value=0.05, key="pair_alpha")
+
+            caveat(
+                "This assumes row *n* of both columns is the same subject. Where that is not "
+                "true the test is invalid, and nothing in the data can tell you it is wrong."
+            )
+            paired = T.wilcoxon_signed_rank(frame[before], frame[after], alpha=alpha)
+            metric_row([
+                ("Test", paired.test, "Paired, non-parametric — no normality assumed"),
+                ("p-value", f"{paired.p_value:.4g}",
+                 "Chance of seeing a difference this large if there were none"),
+                ("Effect size", f"{paired.effect_size:.3f}"
+                 if paired.effect_size is not None else "—", paired.effect_size_name),
+                ("Verdict", "significant" if paired.significant else "not significant",
+                 f"at α = {alpha}"),
+            ])
+            inference(paired.conclusion, label=paired.test)
+            for name, verdict in (paired.assumptions or {}).items():
+                caveat(f"**{name.replace('_', ' ')}** — {verdict}")
+
+            differences = (frame[after] - frame[before]).dropna()
+            if not differences.empty:
+                chart(
+                    plots.histogram(differences, title=f"{after} minus {before}, row by row",
+                                    mode=state.theme),
+                    caption=f"Median change {differences.median():,.4g} across "
+                            f"{len(differences):,} complete pairs. A distribution centred on zero "
+                            "is what 'no difference' looks like.",
+                    key="pair_hist",
+                )
+
+    elif not numeric or not categorical:
         empty_state("Needs a numeric measure and a grouping variable",
                     "This dataset does not have both.")
     else:
@@ -140,6 +199,14 @@ with relate_tab:
             figure = plots.correlation_heatmap(frame, numeric, mode=state.theme, method=method)
             if figure is not None:
                 chart(figure, key="rel_heat")
+
+            with st.expander("The full matrix as numbers"):
+                st.caption(
+                    "Every pair, not only the strong ones. Read down a column to see what a "
+                    "variable moves with — and read the diagonal as a reminder that a variable "
+                    "correlates perfectly with itself and that means nothing."
+                )
+                dataframe(correlation_matrix(frame, method=method, columns=numeric).round(3))
             caveat(
                 "Correlation shows what moves together. It cannot show what causes what — a third "
                 "variable, reverse causation or coincidence all produce the same number."

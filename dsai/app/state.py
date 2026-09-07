@@ -59,6 +59,10 @@ class Workspace:
     context: BusinessContext = field(default_factory=BusinessContext)
     objectives: list[Objective] = field(default_factory=list)
     objective: Objective | None = None
+    #: Column type corrections the user made. Kept apart from the profile so a
+    #: re-profile does not silently undo them — the user is the authority on
+    #: what a column means, and the profiler only on what it measured.
+    type_overrides: dict[str, Any] = field(default_factory=dict)
     #: Several named pipelines can be held at once and compared. ``pipeline``
     #: below is a view onto whichever is active, so everything that predates
     #: multiple pipelines keeps working unchanged.
@@ -124,11 +128,111 @@ class Workspace:
     def has_run(self) -> bool:
         return self.run is not None and self.run.status == "complete"
 
-    def reset_analysis(self) -> None:
-        self.run = None
+    # -- lifecycle ------------------------------------------------------------
+    def set_dataset(self, frame: pd.DataFrame, source: DataSource | None, name: str) -> None:
+        """Load a new dataset, discarding everything derived from the last one.
+
+        This exists because forgetting to do it is silent and awful: the frame
+        changes, the profile does not, and every page downstream then describes
+        columns that are no longer there. The only way out used to be restarting
+        the app.
+        """
+        self.frame = frame
+        self.source = source
+        self.dataset_name = name
+        self.forget_derived()
+
+    def forget_derived(self) -> None:
+        """Clear everything computed *from* the data. The data itself stays.
+
+        The engine goes too. It caches the typed frame and every fitted model
+        from the dataset it was working on, so keeping it across a change of
+        dataset is how a model trained on one file ends up scoring another.
+        """
+        self.profile = None
+        self.typed_frame = None
+        self.objectives = []
         self.objective = None
+        self.type_overrides = {}
+        self.run = None
+        self.runs = []
         self.pipelines = {}
         self.active_pipeline = "default"
+        self.chat = []
+        self.scientist = None
+        # Widget values Streamlit is holding on our behalf. A selectbox keyed by
+        # column name keeps its old selection, and a column that no longer
+        # exists is not a valid option — which raises rather than degrading.
+        self._clear_widget_state()
+
+    def reset_analysis(self, reprofile: bool = False) -> None:
+        """The results are stale, but the data is not.
+
+        The default is for a change of business context: the measurements still
+        stand, so the profile is kept, but what the platform thinks you want and
+        everything built on that has to be worked out again.
+
+        ``reprofile=True`` is for when the *meaning* of a column changed — a
+        corrected type changes how that column is coerced, so the profile and
+        the typed frame both have to be rebuilt. The user's corrections are held
+        on ``type_overrides`` and re-applied, so rebuilding does not overrule
+        them.
+        """
+        self.objectives = []
+        self.objective = None
+        self.run = None
+        self.pipelines = {}
+        self.active_pipeline = "default"
+        self.scientist = None
+        if reprofile:
+            self.profile = None
+            self.typed_frame = None
+        self._clear_widget_state()
+
+    @staticmethod
+    def _clear_widget_state() -> None:
+        """Drop the widget values that name columns of the previous dataset.
+
+        Streamlit holds a keyed widget's last value across reruns. A selectbox
+        keyed by column name therefore comes back pointing at a column the new
+        dataset does not have, and an invalid option raises rather than
+        degrading — which is the other half of why loading a second file used to
+        require restarting the app.
+        """
+        try:
+            import streamlit as st
+
+            stale = [
+                key for key in st.session_state
+                if isinstance(key, str)
+                and key.startswith(("_prep_", "_inspect_", "imp_", "impg_", "impv_",
+                                    "_score_", "_preprocessing_", "_library_"))
+            ]
+            for key in stale:
+                del st.session_state[key]
+        except Exception:
+            # Called outside a Streamlit run (a test, a script). Nothing to clear.
+            pass
+
+    def profile_dataset(self) -> None:
+        """Profile the loaded frame, re-applying the user's type corrections.
+
+        One place, so every caller gets the corrections back. Re-profiling
+        without them would quietly overrule the user, which is the opposite of
+        how this platform is supposed to treat a person's judgement.
+        """
+        from dsai.core.profiler import override_semantic_type
+
+        run = scientist().understand(self.frame, self.dataset_name, self.context, self.source)
+        profile = run.profile
+        for column, semantic_type in self.type_overrides.items():
+            try:
+                override_semantic_type(profile, column, semantic_type)
+            except KeyError:
+                continue        # the column is gone; the correction no longer applies
+        self.profile = profile
+        self.typed_frame = scientist()._typed_frame
+        self.objectives = run.objectives
 
     def notify(self, level: str, message: str) -> None:
         self.notices.append((level, message))
