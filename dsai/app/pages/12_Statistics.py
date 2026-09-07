@@ -17,6 +17,39 @@ from dsai.statistics.descriptive import (
 )
 from dsai.viz import plots
 
+def _cols(labels: dict[str, str], help_text: dict[str, str] | None = None) -> dict:
+    """Column headers as read statistics jargon (cv, iqr, sem) rather than the
+    raw field names those functions return — the numbers are unchanged, only
+    how the header reads and what it explains on hover."""
+    help_text = help_text or {}
+    return {
+        key: st.column_config.Column(label, help=help_text.get(key))
+        for key, label in labels.items()
+    }
+
+
+_NUMERIC_COLS = _cols(
+    {"variable": "Variable", "n": "N", "missing": "Missing", "mean": "Mean", "median": "Median",
+     "mode": "Mode", "std": "Std dev", "variance": "Variance", "cv": "CV", "min": "Min",
+     "q1": "Q1", "q3": "Q3", "max": "Max", "iqr": "IQR", "range": "Range",
+     "skewness": "Skewness", "kurtosis": "Kurtosis", "sem": "SEM",
+     "ci95_lower": "95% CI low", "ci95_upper": "95% CI high"},
+    {"n": "Non-missing values used", "cv": "Coefficient of variation — std dev relative to the "
+     "mean; higher means more spread relative to size", "q1": "25th percentile",
+     "q3": "75th percentile", "iqr": "Interquartile range — Q3 minus Q1, the spread of the "
+     "middle 50% of values", "sem": "Standard error of the mean",
+     "ci95_lower": "Lower bound of the 95% confidence interval for the mean",
+     "ci95_upper": "Upper bound of the 95% confidence interval for the mean"},
+)
+_CATEGORICAL_COLS = _cols(
+    {"variable": "Variable", "n": "N", "missing": "Missing", "distinct": "Distinct",
+     "mode": "Most common", "mode_count": "Count", "mode_share": "Share",
+     "entropy": "Entropy", "normalised_entropy": "Normalised entropy", "top_values": "Top values"},
+    {"mode_count": "Rows holding the most common value", "mode_share": "Share of rows holding "
+     "the most common value", "normalised_entropy": "0 = one category dominates every row; "
+     "1 = categories are evenly spread"},
+)
+
 state = workspace()
 apply_theme(state.theme)
 sidebar_chrome(state)
@@ -44,7 +77,7 @@ describe_tab, compare_tab, relate_tab, assume_tab = st.tabs(
 with describe_tab:
     if numeric:
         st.markdown("**Numeric variables**")
-        dataframe(describe_numeric(frame, numeric).round(4))
+        dataframe(describe_numeric(frame, numeric).round(4), column_config=_NUMERIC_COLS)
         caveat(
             "Where the mean and median differ noticeably the distribution is skewed, and the mean "
             "stops describing a typical case. Report the median for those."
@@ -55,7 +88,7 @@ with describe_tab:
             dataframe(outlier_table(frame, numeric).round(3))
     if categorical:
         st.markdown("**Categorical variables**")
-        dataframe(describe_categorical(frame, categorical))
+        dataframe(describe_categorical(frame, categorical), column_config=_CATEGORICAL_COLS)
         caveat(
             "Normalised entropy near 0 means one category dominates and the variable carries little "
             "information; near 1 means the categories are evenly spread."

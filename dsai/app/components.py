@@ -2021,6 +2021,7 @@ def empty_state(title: str, detail: str = "", actions: list[tuple[str, str]] | N
     if actions:
         columns = st.columns(len(actions) + 2)
         for column, (label, page) in zip(columns, actions):
+            label = label if label.endswith("→") else f"{label} →"
             try:
                 column.page_link(page, label=label)
             except Exception:

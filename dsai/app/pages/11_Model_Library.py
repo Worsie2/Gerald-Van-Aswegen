@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from itertools import zip_longest
+
 import pandas as pd
 import streamlit as st
 
@@ -61,6 +63,21 @@ with models_tab:
             or any(needle in item.lower() for item in (s.good_for or []))
             or any(needle in item.lower() for item in (s.advantages or []))
         ]
+    elif category == "all" and family == "all" and task == "all":
+        # Untouched filters: registration order would otherwise put every
+        # regression algorithm first (they are registered first in code) and
+        # the "first 24 as cards" preview would look like a regression-only
+        # library. Round-robin across categories so the first screen a new
+        # user sees is representative of the whole registry.
+        by_category: dict[str, list] = {}
+        order: list[str] = []
+        for spec in specs:
+            if spec.category not in by_category:
+                by_category[spec.category] = []
+                order.append(spec.category)
+            by_category[spec.category].append(spec)
+        specs = [spec for row in zip_longest(*(by_category[c] for c in order))
+                 for spec in row if spec is not None]
 
     st.caption(
         f"{len(specs)} algorithm(s) match. Showing the first 24 as cards — narrow the search or "

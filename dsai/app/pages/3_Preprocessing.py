@@ -135,9 +135,11 @@ note.caption(
 st.divider()
 
 # A pipeline switcher above the tabs: several can be held at once and compared.
-switch, new, delete = st.columns([3, 1, 1])
+# Duplicate/Delete only appear once there is a pipeline to act on — two disabled
+# buttons floating over empty space before that just look broken.
 names = state.pipeline_names
 if names:
+    switch, new, delete = st.columns([3, 1, 1])
     chosen = switch.selectbox(
         "Working on", names,
         index=names.index(state.active_pipeline) if state.active_pipeline in names else 0,
@@ -146,19 +148,19 @@ if names:
     if chosen != state.active_pipeline:
         state.active_pipeline = chosen
         st.rerun()
-else:
-    switch.caption("No pipeline yet — build one below.")
 
-new.write("")
-if new.button("Duplicate", disabled=state.pipeline is None, width='stretch',
-              help="Copy the active pipeline so you can try a variation without losing this one."):
-    state.add_pipeline(f"{state.active_pipeline} copy", state.pipeline.copy())
-    state.notify("success", f"Duplicated as '{state.active_pipeline}'.")
-    st.rerun()
-delete.write("")
-if delete.button("Delete", disabled=len(names) < 2, width='stretch'):
-    state.remove_pipeline(state.active_pipeline)
-    st.rerun()
+    new.write("")
+    if new.button("Duplicate", disabled=state.pipeline is None, width='stretch',
+                  help="Copy the active pipeline so you can try a variation without losing this one."):
+        state.add_pipeline(f"{state.active_pipeline} copy", state.pipeline.copy())
+        state.notify("success", f"Duplicated as '{state.active_pipeline}'.")
+        st.rerun()
+    delete.write("")
+    if delete.button("Delete", disabled=len(names) < 2, width='stretch'):
+        state.remove_pipeline(state.active_pipeline)
+        st.rerun()
+else:
+    st.caption("No pipeline yet — build one below.")
 
 (build_tab, missing_tab, graph_tab, edit_tab, preview_tab, effect_tab, compare_tab,
  saved_tab) = st.tabs(
