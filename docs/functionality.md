@@ -15,7 +15,7 @@ model, trains and cross-validates a field of them, compares them on more than th
 headline score, explains the winner, checks its own conclusions, says what to do,
 and then lets the resulting model score new data.
 
-Roughly 29,000 lines of Python across 83 modules, with 180 tests.
+Roughly 33,500 lines of Python across 94 modules, with 252 tests.
 
 Stack: Python 3.11, pandas, scikit-learn, scipy, statsmodels, XGBoost, LightGBM,
 mlxtend, Plotly, Streamlit. Runs entirely locally; no data leaves the machine and
@@ -318,6 +318,54 @@ structural breaks, gaps, autocorrelation.
 
 ---
 
+## 10a. Challenging the result
+
+Everything in this section exists to attack the analysis rather than produce it.
+
+**Sensitivity analysis.** Re-runs the analysis across up to 20 alternative
+specifications — a different model family, minimal or thorough preprocessing,
+mean or KNN imputation instead of median, winsorised or untouched outliers, a
+different seed, a different fold count, and without whichever predictor is most
+questionable — and reports whether the same variable still comes out strongest.
+A conclusion that survives all of them is worth acting on; one that flips when
+the outlier treatment changes is a finding about the outlier treatment, and the
+report says which lever moved it.
+
+**Subgroup discovery.** Finds where prediction error is materially different,
+across single conditions and pairs of conditions. Two safeguards: nothing under
+30 rows is reported, and a group is flagged only when it stands beyond three
+standard errors — not merely above average, which half of all groups are. The
+wording is always a measured difference, never bias or a fairness failure.
+
+**Prediction intervals.** Split conformal prediction fitted on held-out
+residuals, with a stated coverage level that is empirically achieved. The
+interval is the same width for every row, and that limitation is stated wherever
+one is shown. Below 20 calibration rows, none is offered.
+
+**Abstention.** The model can refuse. Severe missingness, an unseen category, a
+value outside the training range, or low model confidence each mark a row as
+*use caution* or *refused*. Abstained rows are kept in the output and flagged —
+never dropped, never silently replaced with a guess.
+
+**Decision threshold.** For classification: state the cost of a false alarm, the
+cost of a miss, the cost of acting and the value of a catch, and the cheapest
+cut-off is computed. Always described as conditional on those costs, never as
+universally optimal.
+
+**Calibration.** Brier score, log loss, a skill score against always predicting
+the base rate, a reliability table, and a plain reading — *when this model says
+80%, the event happens about N% of the time*.
+
+**Dataset versions.** Each distinct state of the data is fingerprinted over its
+values and summarised; the diff names rows and columns added or removed, type
+changes, missingness shifts, new or vanished categories, and distributions that
+moved — with a warning on each that would invalidate a model.
+
+**Reviewer mode.** Seven areas with a status, what to check and where to look.
+Deliberately not a verdict.
+
+---
+
 ## 11. Output
 
 **Natural language.** A question in plain English is parsed into an intent, the
@@ -381,16 +429,17 @@ standing.
 | Page | Tabs |
 |---|---|
 | Data | Upload / Database / Samples; then Preview, Detected types, Inspect a variable, Data quality, Possible targets, Statistics |
+| Robustness | What could change this conclusion?, Where does the model work poorly? |
 | Context | one form |
 | Preprocessing | Build, Missing values, The pipeline, Edit steps, Preview effect, What it changed, Compare pipelines, Saved pipelines |
 | Analysis | Candidate models, As a table, Why these choices |
-| Models | Performance, Explanation, Diagnostics, Why this row?, More data?, Hyper-parameters, Decision log, Charts |
+| Models | Performance, Model card, Explanation, Diagnostics, Decision threshold, Why this row?, More data?, Hyper-parameters, Decision log, Charts |
 | Insights | As a report, As cards |
 | Recommendations | grouped by category |
-| Score new data | Upload / Re-score; then Predictions, Has the data changed?, What the predictions look like |
+| Score new data | Upload / Re-score; then Predictions, Reliability, Has the data changed?, What the predictions look like |
 | Statistics | Describe, Compare groups, Relationships, Assumptions |
 | Report | Read, Charts, Methodology & workings, Decision log, Reproducibility, Export |
-| Projects | Save, Open, Run history, Compare two runs |
+| Projects | Save, Open, Run history, Compare two runs, Review this analysis, Dataset versions |
 | Model library | Algorithms, Preprocessing steps, Extending it |
 
 **Visual language.** Four kinds of statement are deliberately distinguishable at
@@ -453,12 +502,15 @@ A reviewer should extend this, not be bounded by it.
 
 1. **No scenario / what-if tool.** The platform shows what drives an outcome but
    cannot answer "what happens if I raise this by 10%".
+1a. **No analysis sandbox.** Experiments overwrite nothing, but there is no
+   explicit "try this without touching the main run" mode.
 2. **No scheduled or repeated runs.** Every analysis is manual.
 3. **Dark mode is CSS layered over a light base.** Streamlit has no runtime
    theming API. It works, but a hard refresh can flash light first.
 4. **No multi-user or collaboration features.** Single user, single machine.
 5. **No model monitoring over time.** Drift is checked at scoring time against
-   the training data, but nothing tracks it across runs.
+   the training data, and dataset versions are tracked within a session, but
+   nothing persists a drift or performance history across sessions.
 6. **No time-series cross-validation beyond a single forward split.**
 7. **No causal inference.** The platform is careful to say every relationship is
    associational, but offers no tools (matching, instrumental variables,

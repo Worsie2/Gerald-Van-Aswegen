@@ -49,7 +49,7 @@ ai_panel(
 st.caption("Try one of these, or type your own below.")
 for row in (EXAMPLES[:4], EXAMPLES[4:8]):
     for column, example in zip(st.columns(len(row)), row):
-        if column.button(example, key=f"eg_{example[:18]}", use_container_width=True):
+        if column.button(example, key=f"eg_{example[:18]}", width='stretch'):
             state.chat.append({"role": "user", "content": example})
             st.session_state["_pending_intent"] = parse_command(
                 example, state.profile, state.context, state.run

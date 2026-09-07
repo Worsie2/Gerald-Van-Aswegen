@@ -63,6 +63,14 @@ class ScoringResult:
     n_skipped: int = 0
     model_name: str = ""
     caveats: list[str] = field(default_factory=list)
+    #: The conformal interval fitted on held-out residuals, where one is possible.
+    intervals: Any = None
+    #: Per-row reliability, and the rows the model refused to answer for.
+    abstention: Any = None
+
+    @property
+    def n_abstained(self) -> int:
+        return self.abstention.n_abstained if self.abstention is not None else 0
 
 
 def _is_identifier_like(series: pd.Series) -> bool:
@@ -255,6 +263,8 @@ def score_new_data(
     result: Any,
     training_frame: pd.DataFrame | None = None,
     keep_columns: list[str] | None = None,
+    contract: Any = None,
+    interval_coverage: float = 0.9,
 ) -> ScoringResult:
     """Predict on *new_frame* with an already-fitted model.
 
@@ -325,6 +335,50 @@ def score_new_data(
                 )
             except Exception:
                 pass
+
+    # ---- uncertainty and abstention ------------------------------------
+    # Both are about the row, not the model's output: a model is equally
+    # confident about a row it understands and one it has never seen anything
+    # like, so its own confidence cannot be the only test.
+    from dsai.engines.uncertainty import assess_rows, fit_conformal
+
+    if task is TaskType.REGRESSION:
+        held_actual = result.extras.get("holdout_actual")
+        held_predicted = result.extras.get("holdout_predicted")
+        if held_actual and held_predicted:
+            out.intervals = fit_conformal(held_actual, held_predicted, coverage=interval_coverage)
+            if out.intervals.usable:
+                column = f"predicted_{target}" if target else "prediction"
+                if column in predictions.columns:
+                    predictions["lower"] = predictions[column] - out.intervals.half_width
+                    predictions["upper"] = predictions[column] + out.intervals.half_width
+                    out.caveats.append(
+                        f"Intervals cover {out.intervals.coverage:.0%} of outcomes and are the "
+                        "same width for every row — this method knows how wrong the model "
+                        "usually is, not where it is less sure."
+                    )
+
+    proba = None
+    if task.is_classification and not isinstance(model, tuple) and hasattr(model, "predict_proba"):
+        try:
+            proba = model.predict_proba(usable)
+        except Exception:
+            proba = None
+
+    out.abstention = assess_rows(
+        usable, training_frame, [c for c in required if c != target],
+        contract=contract, probabilities=proba,
+    )
+    if out.abstention.rules_applied:
+        predictions["reliability"] = out.abstention.status.reindex(predictions.index)
+        predictions["reliability_reason"] = out.abstention.reasons.reindex(predictions.index)
+        if out.abstention.n_abstained:
+            out.caveats.append(
+                f"{out.abstention.n_abstained:,} row(s) are marked **abstained**: the model was "
+                "asked about rows unlike anything it trained on. Their predictions are kept in "
+                "the output and flagged rather than removed, so nothing silently replaces a "
+                "refusal with a guess — but they should not be acted on."
+            )
 
     out.predictions = predictions
     out.n_scored = len(predictions)

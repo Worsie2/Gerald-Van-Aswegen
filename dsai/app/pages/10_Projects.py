@@ -9,10 +9,12 @@ import streamlit as st
 
 from dsai.app.components import (
     ai_panel, apply_theme, caveat, dataframe, empty_state, error_state, page_header,
-    show_notices, sidebar_chrome,
+    show_notices, sidebar_chrome, simple_table,
 )
 from dsai.app.state import workspace
+from dsai.core.versioning import diff_versions, snapshot
 from dsai.engines.compare import compare_runs
+from dsai.reporting.review import build_review
 from dsai.repro.project import Project, list_projects
 
 state = workspace()
@@ -29,8 +31,9 @@ page_header(
 root = st.text_input("Projects folder", value=str(Path.home() / "dsai_projects"))
 root_path = Path(root)
 
-create_tab, open_tab, runs_tab, compare_tab = st.tabs(
-    ["Save current work", "Open a project", "Run history", "Compare two runs"]
+create_tab, open_tab, runs_tab, compare_tab, review_tab, versions_tab = st.tabs(
+    ["Save current work", "Open a project", "Run history", "Compare two runs",
+     "Review this analysis", "Dataset versions"]
 )
 
 with create_tab:
@@ -187,5 +190,105 @@ with compare_tab:
                         "that depends on what you changed."
                     )
                     dataframe(diff.findings)
+
+with review_tab:
+    # Reviewing someone else's analysis is mostly a search problem. This
+    # assembles the picture so the reviewer can spend their time questioning it.
+    if state.run is None:
+        empty_state(
+            "Nothing to review yet",
+            "A review package is built from a completed analysis.",
+            actions=[("Run one", "pages/4_Analysis.py")],
+        )
+    else:
+        package = build_review(state.run)
+        st.caption(
+            "What a second pair of eyes should check, area by area. Deliberately not a verdict — "
+            "whether the analysis is acceptable is the judgement a reviewer was brought in to "
+            "make, and a tool that made it for them would be answering their question."
+        )
+        if package.n_concerns:
+            error_state(
+                f"{package.n_concerns} area(s) need an answer",
+                package.overall,
+                "Work through the areas marked below. None of them means the analysis is wrong; "
+                "each is something a reviewer should hear an answer to before signing it off.",
+            )
+        else:
+            ai_panel(package.overall, heading="AI Analyst · review")
+
+        marks = {"ok": ("ok", "good"), "question": ("worth asking about", "warning"),
+                 "concern": ("needs an answer", "critical")}
+        for area in package.areas:
+            label, tone = marks[area.status]
+            with st.expander(f"{area.name} — {label}",
+                             expanded=area.status == "concern"):
+                st.markdown(f"**{area.summary}**")
+                for check in area.checks:
+                    st.markdown(f"- {check}")
+                if area.where:
+                    st.caption(f"Where to look: {area.where}")
+
+        st.download_button(
+            "Review package (.md)", package.to_markdown(),
+            file_name=f"{state.dataset_name}_review.md", mime="text/markdown",
+            width='stretch',
+        )
+
+
+with versions_tab:
+    # A version is a summary, never a copy of the rows. Two loads of the same
+    # file produce the same fingerprint; any real change produces a different one.
+    if not state.has_data:
+        empty_state("No dataset loaded", "Load one to start tracking versions.",
+                    actions=[("Load a dataset", "pages/1_Data.py")])
+    else:
+        current = snapshot(state.frame, label=state.dataset_name,
+                           source=(state.source.path if state.source else ""))
+        known = {v.fingerprint: v for v in state.dataset_versions}
+        if current.fingerprint not in known:
+            state.dataset_versions.append(current)
+            known[current.fingerprint] = current
+
+        st.caption(
+            "Each version records the shape, types, missingness, categories and distributions of "
+            "the data — never the rows themselves. The fingerprint is over the values, so two "
+            "loads of the same file are the same version and any real change is a new one."
+        )
+        simple_table([
+            {"Version": f"v{index + 1}", "Fingerprint": version.short,
+             "Loaded": version.created_at, "Rows": f"{version.n_rows:,}",
+             "Columns": str(version.n_columns), "Label": version.label}
+            for index, version in enumerate(state.dataset_versions)
+        ])
+
+        if len(state.dataset_versions) < 2:
+            st.info(
+                "Only one version so far. Load a refreshed copy of this data and the differences "
+                "between them appear here — which is usually where an unexplained change in "
+                "results comes from."
+            )
+        else:
+            labels = [f"v{i + 1} · {v.short} · {v.n_rows:,} rows"
+                      for i, v in enumerate(state.dataset_versions)]
+            picker = st.columns(2)
+            a = picker[0].selectbox("Earlier", range(len(labels)),
+                                    index=len(labels) - 2, format_func=lambda i: labels[i])
+            b = picker[1].selectbox("Later", range(len(labels)),
+                                    index=len(labels) - 1, format_func=lambda i: labels[i])
+            if a == b:
+                caveat("Both selections are the same version.")
+            else:
+                difference = diff_versions(state.dataset_versions[a], state.dataset_versions[b])
+                if difference.identical:
+                    ai_panel(difference.summary, heading="AI Analyst · dataset versions")
+                else:
+                    ai_panel(difference.summary, heading="AI Analyst · what changed",
+                             why="A difference in results between two runs is more often the data "
+                                 "than the method. This is where to check first.")
+                    table = difference.table()
+                    if not table.empty:
+                        dataframe(table)
+
 
 columns[3].metric("Project", Path(state.project_path).name if state.project_path else "unsaved")

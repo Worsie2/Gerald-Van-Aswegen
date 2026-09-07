@@ -1256,7 +1256,7 @@ def chart(
     import streamlit as st
 
     target = container if container is not None else st
-    target.plotly_chart(figure, use_container_width=True, key=key)
+    target.plotly_chart(figure, width='stretch', key=key)
     if caption:
         target.caption(caption)
 
@@ -1269,7 +1269,7 @@ def chart(
     always = bool(getattr(getattr(workspace, "access", None), "always_show_tables", False))
     label = alt or "The numbers behind this chart"
     with target.expander(label, expanded=always):
-        st.dataframe(table, use_container_width=True, hide_index=True)
+        st.dataframe(table, width='stretch', hide_index=True)
 
 
 def figure_to_frame(figure: Any, max_rows: int = 500) -> pd.DataFrame | None:
@@ -2002,7 +2002,7 @@ def simple_table(rows: list[dict[str, Any]], columns: list[str] | None = None) -
 def dataframe(frame: pd.DataFrame, **kwargs: Any) -> None:
     import streamlit as st
 
-    st.dataframe(frame, use_container_width=True, hide_index=True, **kwargs)
+    st.dataframe(frame, width='stretch', hide_index=True, **kwargs)
 
 
 def empty_state(title: str, detail: str = "", actions: list[tuple[str, str]] | None = None) -> None:

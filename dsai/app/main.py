@@ -49,6 +49,11 @@ SECTIONS = {
             # short of being worth anything. This is the other half.
             _page(PAGES / "13_Score.py", "8 · Score new data"),
         ],
+        "Challenge": [
+            # Deliberately its own group: everything here exists to attack the
+            # result rather than to produce it.
+            _page(PAGES / "14_Robustness.py", "Robustness"),
+        ],
         "Investigate": [
             _page(PAGES / "8_Ask.py", "Ask a question"),
             _page(PAGES / "12_Statistics.py", "Statistics"),

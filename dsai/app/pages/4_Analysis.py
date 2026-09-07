@@ -428,7 +428,7 @@ label = {
     "manual": "▶  Run with my settings",
 }[mode_key]
 
-if st.button(label, type="primary", use_container_width=True):
+if st.button(label, type="primary", width='stretch'):
     placeholder = st.empty()
     events: list = []
 

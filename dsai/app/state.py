@@ -71,6 +71,9 @@ class Workspace:
     settings: RunSettings = field(default_factory=RunSettings)
     run: AnalysisRun | None = None
     runs: list[AnalysisRun] = field(default_factory=list)
+    #: Summaries of each distinct state of the data seen this session. Never the
+    #: rows — a version records shape, types, missingness and distributions.
+    dataset_versions: list[Any] = field(default_factory=list)
     scientist: AIDataScientist | None = None
     project_path: str | None = None
     mode: str = "guided"                 # guided | advanced
@@ -159,6 +162,7 @@ class Workspace:
         self.pipelines = {}
         self.active_pipeline = "default"
         self.chat = []
+        self.dataset_versions = []
         self.scientist = None
         # Widget values Streamlit is holding on our behalf. A selectbox keyed by
         # column name keeps its old selection, and a column that no longer

@@ -159,24 +159,24 @@ with export_tab:
 
     columns[0].download_button(
         "Markdown report", markdown, file_name=f"{stem}.md", mime="text/markdown",
-        use_container_width=True,
+        width='stretch',
     )
     columns[1].download_button(
         "HTML report", to_html(run, audience_key, frame=frame, methodology=methodology),
         file_name=f"{stem}.html",
-        mime="text/html", use_container_width=True,
+        mime="text/html", width='stretch',
         help="Self-contained: text, tables and the charts, interactive, with no internet needed.",
     )
     columns[2].download_button(
         "JSON (full results)", to_json(run), file_name=f"{stem}.json", mime="application/json",
-        use_container_width=True,
+        width='stretch',
     )
 
     columns = st.columns(3)
     data_hint = (run.source.path if run.source and run.source.path else "your_data.csv")
     columns[0].download_button(
         "Python script", to_python(run, data_path=data_hint),
-        file_name=f"{stem}_reproduce.py", mime="text/x-python", use_container_width=True,
+        file_name=f"{stem}_reproduce.py", mime="text/x-python", width='stretch',
         help="Standalone pandas + scikit-learn. Reproduces this analysis without the platform.",
     )
 
@@ -186,16 +186,16 @@ with export_tab:
             columns[1].download_button(
                 "Excel workbook", path.read_bytes(), file_name=f"{stem}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+                width='stretch',
                 help="Summary, model comparison, findings, recommendations, variable profile and decision log.",
             )
         except Exception as exc:
-            columns[1].button("Excel unavailable", disabled=True, use_container_width=True,
+            columns[1].button("Excel unavailable", disabled=True, width='stretch',
                               help=str(exc))
 
     columns[2].download_button(
         "Business summary", to_markdown(run, "business", frame=frame),
-        file_name=f"{stem}_business.md", mime="text/markdown", use_container_width=True,
+        file_name=f"{stem}_business.md", mime="text/markdown", width='stretch',
     )
 
     st.divider()
@@ -206,7 +206,7 @@ with export_tab:
         "trust assessment, the decision log, the manifest, the charts, runnable Python, and a "
         "README naming what each file is for. Every file carries the same fingerprint."
     )
-    if st.button("Build the audit package", use_container_width=True):
+    if st.button("Build the audit package", width='stretch'):
         with st.status("Assembling…", expanded=False) as status:
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory) / "analysis"
@@ -226,7 +226,7 @@ with export_tab:
         st.download_button(
             "Download the audit package (.zip)", st.session_state["_audit_zip"],
             file_name=f"{stem}_audit_package.zip", mime="application/zip",
-            use_container_width=True,
+            width='stretch',
         )
         for name, reason in (st.session_state.get("_audit_failed") or {}).items():
             caveat(f"**{name}** could not be written — {reason}")
@@ -244,7 +244,7 @@ with export_tab:
                 st.download_button(
                     f"Charts as PNG ({len(files)} files, .zip)", archive.getvalue(),
                     file_name=f"{stem}_charts.zip", mime="application/zip",
-                    use_container_width=True,
+                    width='stretch',
                 )
             else:
                 caveat(
@@ -259,7 +259,7 @@ with export_tab:
                              methodology=methodology)
                 st.download_button(
                     "PDF report", Path(pdf).read_bytes(), file_name=f"{stem}.pdf",
-                    mime="application/pdf", use_container_width=True,
+                    mime="application/pdf", width='stretch',
                 )
             except Exception as exc:
                 st.caption(

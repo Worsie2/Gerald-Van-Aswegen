@@ -141,31 +141,115 @@ and sends the reader looking for a problem in their dataset that is not there.
 
 ---
 
+## Built this round — Phase 2
+
+### §12, §13 — Sensitivity and robustness
+
+`dsai/engines/sensitivity.py`, surfaced on a new **Robustness** page.
+
+The analysis is re-run across up to 20 alternative specifications — a different
+model family, minimal or thorough preprocessing, mean or KNN imputation instead
+of median, winsorised or untouched outliers, a different seed, a different fold
+count, and without whichever predictor is most questionable. Every variation is
+one a competent analyst might have chosen; searching over unreasonable ones and
+reporting that the result "survived" would be theatre.
+
+Agreement is measured on **what a reader acts on** — whether the same variable
+comes out strongest — not on the third decimal place of a metric. Two things
+that mattered in testing: the baseline model is excluded (it ignores every
+predictor by design, so including it manufactures a disagreement that means
+nothing), and a categorical driver named before and after one-hot encoding
+counts as the same variable, or every dataset with a categorical driver would
+report a false negative.
+
+On the water-customers sample: 15 specifications in 62 seconds, verdict
+**stable**, the planted premium-tier effect strongest in 13 of 15.
+
+### §16 — Prediction intervals
+
+Split conformal prediction, fitted on held-out residuals. It assumes only that
+new rows resemble the calibration rows — no distributional assumption, no
+assumption that the model is correct. Empirical coverage on fresh data measures
+0.912 against a 0.90 target.
+
+The cost is that the interval is the same width everywhere. That is stated
+plainly wherever one is shown: this method knows how wrong the model usually is,
+not where it is less sure, and widening some intervals and not others would be
+inventing a confidence the model does not have. Below 20 calibration rows it
+refuses rather than producing a guess about a guess.
+
+### §17 — Abstention
+
+Four tests, all about the **row** rather than the model's output — a model is
+equally confident about a row it understands and one it has never seen anything
+like, so its own confidence cannot be the only test: severe missingness, a
+category never seen in training, a value outside the training range, and low
+model confidence where the model has one worth reading.
+
+Abstained rows are kept in the output and flagged, never dropped and never
+silently replaced with a guess. In testing, rows with a predictor set far outside
+its training range predicted **R1.1 billion** — refused, correctly.
+
+### §18, §19 — Calibration and decision threshold
+
+Calibration gained Brier score, log loss, a Brier skill score against always
+predicting the base rate, and a plain reading: *when this model says 80%, the
+event happens about N% of the time*. Systematic over- and under-confidence are
+named as such.
+
+The threshold tool takes the cost of a false alarm, the cost of a miss, the cost
+of acting and the value of a catch, and recommends the cheapest cut-off. Verified:
+costly misses push the threshold down, costly false alarms push it up. Every
+statement of the answer says it depends entirely on the costs supplied and is not
+universally optimal.
+
+### §20, §21 — Subgroup performance and discovery
+
+Single conditions and pairs of conditions — "Region C *and* high spend", which is
+usually where a real weakness hides. Two safeguards, both deliberately
+conservative: nothing under 30 rows is reported, and a group is only flagged when
+it stands beyond three standard errors, not merely above average, which half of
+all groups are.
+
+Tested against a planted weakness: found *region = C and spend high* as the top
+result at 3.8× the overall error. The wording is always a measured difference —
+naming it bias or a fairness failure would be a conclusion this evidence cannot
+support, and would let the reader skip the investigation that matters.
+
+### §24 — Dataset versioning
+
+A version records shape, types, missingness, categories and distributions — never
+the rows. The fingerprint is over the values, so two loads of the same file are
+the same version and any real change is a new one. The diff names rows added and
+removed, columns added and removed, type changes, missingness shifts, categories
+that appeared or vanished, and distributions that moved by more than 0.2 standard
+deviations — with a warning attached to each that would invalidate a model.
+
+### §30 — Reviewer mode
+
+Seven areas — question, data, preprocessing, validation, model, evidence,
+recommendations — each with a status, a summary, what to check, and where to look.
+Exportable.
+
+Deliberately **not a verdict**. Whether the analysis is acceptable is the
+judgement the reviewer was brought in to make, and a tool that made it for them
+would be answering their question.
+
+---
+
 ## Deferred, with reasons
 
-### Phase 2 — not started
+### Phase 2 — remaining
 
-**§13 Sensitivity analysis** is the single most valuable item left. Re-running an
-analysis across 20 reasonable specifications and reporting whether the direction
-survives is a genuinely different claim from anything the platform makes today.
-It is also the most expensive: 20× the compute, and it needs a specification
-space that is defensible rather than arbitrary.
-
-**§14 Analysis sandbox** depends on the run object model being clean enough to
-fork. It largely is now.
-
-**§16 Prediction intervals** — conformal prediction would be the honest
-implementation. The spec's own caution applies: do not manufacture uncertainty
-where the model cannot support it, and most models here cannot.
-
-**§17 Model abstention** — the scoring engine already reports unseen categories,
-schema mismatches and drift. Turning those into a per-row 🟢🟡🔴 status and an
-abstention count is a small extension of existing work.
-
-**§19 Threshold/cost analysis**, **§21 subgroup discovery**, **§24 data
-versioning**, **§30 reviewer mode** — all tractable, none started.
+**§14 Analysis sandbox** is the only Phase 2 item left. The run object model is
+now clean enough to fork, so this is mostly UI: a second run that never
+overwrites the first, with the existing run comparison pointed at the pair.
 
 ### Phase 3 and 4 — architectural groundwork only
+
+Phase 2's dataset versioning is the foundation Phase 3's monitoring would build
+on: a version is already fingerprinted and diffable, and the scoring page already
+computes drift. What is missing is somewhere to *keep* those across sessions.
 
 Monitoring, scheduled runs, deployment and API scoring need a persistent service.
 This is a local desktop application by design; adding a service changes what the
@@ -219,6 +303,14 @@ light would lose the part a reader can act on.
 test and it is the right one. Several items in the spec — a DAG builder, forecast
 reconciliation, synthetic controls — would each need to be a small product of
 their own to be honest, and a shallow version would be worse than none.
+
+---
+
+## Maintenance done alongside
+
+`use_container_width` was deprecated by Streamlit with a removal date that has
+now passed; 27 call sites were migrated to `width="stretch"` / `width="content"`
+before the next Streamlit upgrade removed them.
 
 ---
 

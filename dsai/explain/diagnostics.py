@@ -219,18 +219,63 @@ def calibration_check(y_true: Any, y_proba: Any, classes: list[Any], n_bins: int
 
     total = sum(r["n"] for r in rows) or 1
     expected_calibration_error = sum(gaps) / total
+    # Two proper scoring rules, because they answer different halves of the
+    # question: Brier is the mean squared error of the probability itself, and
+    # log loss punishes a confident wrong answer far harder than a hedged one.
+    epsilon = 1e-15
+    clipped = np.clip(positive, epsilon, 1 - epsilon)
+    brier = float(np.mean((positive - actual) ** 2))
+    log_loss = float(-np.mean(actual * np.log(clipped) + (1 - actual) * np.log(1 - clipped)))
+
+    # The baseline any probability model has to beat: always predicting the base
+    # rate. A Brier score is meaningless without it.
+    base_rate = float(actual.mean())
+    baseline_brier = float(np.mean((base_rate - actual) ** 2))
+    skill = (1 - brier / baseline_brier) if baseline_brier > 1e-12 else 0.0
+
+    direction = ""
+    if rows:
+        mean_gap = float(np.mean([r["gap"] for r in rows]))
+        if mean_gap < -0.05:
+            direction = " The model is systematically over-confident: events happen less often " \
+                        "than it says they will."
+        elif mean_gap > 0.05:
+            direction = " The model is systematically under-confident: events happen more often " \
+                        "than it says they will."
+
     return {
         "supported": True,
         "bins": rows,
         "expected_calibration_error": round(float(expected_calibration_error), 4),
+        "brier_score": round(brier, 4),
+        "baseline_brier": round(baseline_brier, 4),
+        "brier_skill_score": round(skill, 4),
+        "log_loss": round(log_loss, 4),
+        "base_rate": round(base_rate, 4),
         "poorly_calibrated": bool(expected_calibration_error > 0.1),
         "interpretation": (
-            f"Average gap between predicted probability and observed rate: "
-            f"{expected_calibration_error:.1%}. "
+            f"When this model says 80%, the event happens about "
+            f"{_observed_near(rows, 0.8)} of the time. Average gap between predicted probability "
+            f"and observed rate: {expected_calibration_error:.1%}."
+            + direction + " "
             + ("Probabilities can be read at face value." if expected_calibration_error <= 0.1
                else "Treat these as scores for ranking, not as true probabilities.")
         ),
+        "scoring_note": (
+            f"Brier score {brier:.4f} against {baseline_brier:.4f} for always predicting the "
+            f"base rate of {base_rate:.1%} — a skill score of {skill:+.1%}. Log loss "
+            f"{log_loss:.4f}. Both are lower-is-better; Brier is the squared error of the "
+            "probability itself, log loss punishes a confident wrong answer far harder."
+        ),
     }
+
+
+def _observed_near(rows: list[dict[str, Any]], target: float) -> str:
+    """What actually happened in the bin nearest a given predicted probability."""
+    if not rows:
+        return "an unknown share"
+    nearest = min(rows, key=lambda r: abs(r["mean_predicted"] - target))
+    return f"{nearest['observed_rate']:.0%}"
 
 
 def learning_curve_data(

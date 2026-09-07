@@ -12,6 +12,7 @@ from dsai.app.components import (
     page_header, require_run, show_notices, sidebar_chrome,
 )
 from dsai.app.state import scientist, workspace
+from dsai.core.schema import TaskType
 from dsai.dataio.loaders import load_dataset
 from dsai.engines.scoring import score_new_data
 from dsai.viz import plots
@@ -105,7 +106,7 @@ with holdout_tab:
         "Runs the model over the dataset already loaded. Useful for producing a prediction for "
         "every row, and for seeing the model's output beside the actual values it was scored on."
     )
-    if st.button("Score the loaded dataset", use_container_width=True):
+    if st.button("Score the loaded dataset", width='stretch'):
         st.session_state["_score_self"] = True
     if st.session_state.get("_score_self"):
         new_frame, label = (state.frame, state.dataset_name)
@@ -124,9 +125,17 @@ keep = st.multiselect(
     help="An identifier here makes the predictions easy to join back onto your own records.",
 )
 
+coverage = st.select_slider(
+    "Prediction interval coverage", [0.5, 0.8, 0.9, 0.95, 0.99], value=0.9,
+    format_func=lambda v: f"{v:.0%}",
+    help="How often the interval should contain the true value. Higher coverage means a wider "
+         "interval — the certainty has to come from somewhere.",
+) if run.best.task_type is TaskType.REGRESSION else 0.9
+
 with st.spinner("Scoring…"):
     result = score_new_data(model, new_frame, run.best, training_frame=training_frame,
-                            keep_columns=keep)
+                            keep_columns=keep, contract=run.contract,
+                            interval_coverage=float(coverage))
 
 if not result.schema.ok:
     error_state(
@@ -150,8 +159,20 @@ ai_panel(
 for note in result.caveats:
     caveat(note)
 
-predictions_tab, drift_tab, distribution_tab = st.tabs(
-    ["Predictions", "Has the data changed?", "What the predictions look like"]
+# Abstentions are shown before the predictions, not after: a refusal that the
+# reader has to scroll past the numbers to find is a refusal nobody sees.
+if result.abstention is not None and result.abstention.n_abstained:
+    error_state(
+        f"{result.abstention.n_abstained:,} row(s) could not be answered",
+        f"{result.abstention.summary()}. These rows are unlike anything the model was trained "
+        "on — a prediction on them would be extrapolation wearing the costume of an estimate.",
+        "They are kept in the output and flagged rather than removed, so nothing silently "
+        "replaces a refusal with a guess. Filter on the `reliability` column before acting on "
+        "anything.",
+    )
+
+predictions_tab, reliability_tab, drift_tab, distribution_tab = st.tabs(
+    ["Predictions", "Reliability", "Has the data changed?", "What the predictions look like"]
 )
 
 with predictions_tab:
@@ -164,8 +185,38 @@ with predictions_tab:
         buffer.getvalue(),
         file_name=f"{state.dataset_name}_predictions.csv",
         mime="text/csv",
-        use_container_width=True,
+        width='stretch',
     )
+
+with reliability_tab:
+    if result.abstention is None or not result.abstention.rules_applied:
+        st.info(result.abstention.note if result.abstention is not None
+                else "No reliability assessment was made.")
+    else:
+        counts = result.abstention.counts
+        metric_row([
+            ("Reliable", f"{counts.get('reliable', 0):,}", "nothing about the row is unusual"),
+            ("Use caution", f"{counts.get('caution', 0):,}", "something is worth checking"),
+            ("Refused", f"{counts.get('abstained', 0):,}", "outside what the model can answer"),
+            ("Tests applied", str(len(result.abstention.rules_applied)),
+             ", ".join(result.abstention.rules_applied)),
+        ])
+        st.caption(
+            "Every test here is about the **row**, not the model's output. A model is equally "
+            "confident about a row it understands and one it has never seen anything like, so "
+            "its own confidence cannot be the only test."
+        )
+        flagged = result.predictions[
+            result.predictions.get("reliability", pd.Series(dtype=object)) != "reliable"
+        ] if "reliability" in result.predictions.columns else pd.DataFrame()
+        if not flagged.empty:
+            st.markdown("**The rows that were flagged**")
+            dataframe(flagged.head(300))
+
+    if result.intervals is not None:
+        st.divider()
+        st.markdown("**Prediction intervals**")
+        st.markdown(result.intervals.explain(run.context.currency if run.context else ""))
 
 with drift_tab:
     if result.drift.empty:

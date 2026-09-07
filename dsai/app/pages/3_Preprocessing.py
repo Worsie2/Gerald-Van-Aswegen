@@ -150,13 +150,13 @@ else:
     switch.caption("No pipeline yet — build one below.")
 
 new.write("")
-if new.button("Duplicate", disabled=state.pipeline is None, use_container_width=True,
+if new.button("Duplicate", disabled=state.pipeline is None, width='stretch',
               help="Copy the active pipeline so you can try a variation without losing this one."):
     state.add_pipeline(f"{state.active_pipeline} copy", state.pipeline.copy())
     state.notify("success", f"Duplicated as '{state.active_pipeline}'.")
     st.rerun()
 delete.write("")
-if delete.button("Delete", disabled=len(names) < 2, use_container_width=True):
+if delete.button("Delete", disabled=len(names) < 2, width='stretch'):
     state.remove_pipeline(state.active_pipeline)
     st.rerun()
 
@@ -181,7 +181,7 @@ with build_tab:
         help="Minimal: only what is necessary. Thorough: also transforms distributions and reduces dimensions.",
     )
     columns[2].write("")
-    if columns[2].button("Build recommended pipeline", type="primary", use_container_width=True):
+    if columns[2].button("Build recommended pipeline", type="primary", width='stretch'):
         spec = None if model_choice.startswith("—") else REGISTRY.get(model_choice)
         pipeline, decisions = recommend_pipeline(
             profile, objective.task_type, objective.target, spec, state.context,
@@ -309,7 +309,7 @@ with missing_tab:
             "the pipeline stays readable."
         )
         if right.button("Add these to the pipeline", type="primary", disabled=not planned,
-                        use_container_width=True):
+                        width='stretch'):
             if pipeline is None:
                 state.add_pipeline("missing values", PreprocessingPipeline(name="missing values"))
                 pipeline = state.pipeline
@@ -519,7 +519,7 @@ with preview_tab:
             export[0].download_button(
                 f"Cleaned data (.csv)", buffer.getvalue(),
                 file_name=f"{state.dataset_name}_cleaned.csv", mime="text/csv",
-                use_container_width=True,
+                width='stretch',
             )
             try:
                 parquet = _io.BytesIO()
@@ -527,7 +527,7 @@ with preview_tab:
                 export[1].download_button(
                     "Cleaned data (.parquet)", parquet.getvalue(),
                     file_name=f"{state.dataset_name}_cleaned.parquet",
-                    mime="application/octet-stream", use_container_width=True,
+                    mime="application/octet-stream", width='stretch',
                 )
             except Exception:
                 export[1].caption("Parquet needs `pyarrow`.")
@@ -679,7 +679,7 @@ with saved_tab:
         columns = st.columns([2, 1])
         name = columns[0].text_input("Pipeline name", value=pipeline.name if pipeline else "pipeline")
         columns[1].write("")
-        if columns[1].button("Save this pipeline", disabled=pipeline is None, use_container_width=True):
+        if columns[1].button("Save this pipeline", disabled=pipeline is None, width='stretch'):
             project.save_pipeline(pipeline, name)
             state.notify("success", f"Saved pipeline '{name}'.")
             st.rerun()

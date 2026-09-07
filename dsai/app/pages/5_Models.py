@@ -11,6 +11,7 @@ from dsai.app.components import (
     workflow_nav,
 )
 from dsai.app.state import scientist, workspace
+from dsai.engines.threshold import CostModel, analyse_thresholds
 from dsai.reporting.model_card import build_model_card
 from dsai.core.schema import TaskType
 from dsai.engines import metrics as M
@@ -130,8 +131,8 @@ metric_row([
 ])
 
 detail_tabs = st.tabs(
-    ["Performance", "Model card", "Explanation", "Diagnostics", "Why this row?", "More data?",
-     "Hyper-parameters", "Decision log", "Charts"]
+    ["Performance", "Model card", "Explanation", "Diagnostics", "Decision threshold",
+     "Why this row?", "More data?", "Hyper-parameters", "Decision log", "Charts"]
 )
 
 with detail_tabs[0]:
@@ -243,10 +244,111 @@ with detail_tabs[3]:
             if run.diagnostics.get("calibration", {}).get("supported"):
                 calibration = run.diagnostics["calibration"]
                 st.markdown("**Probability calibration**")
+                metric_row([
+                    ("Brier score", f"{calibration.get('brier_score', 0):.4f}",
+                     "Mean squared error of the probability itself. Lower is better."),
+                    ("Against base rate", f"{calibration.get('baseline_brier', 0):.4f}",
+                     "What always predicting the base rate would score."),
+                    ("Skill", f"{calibration.get('brier_skill_score', 0):+.1%}",
+                     "How much better than that baseline. Zero means no better."),
+                    ("Log loss", f"{calibration.get('log_loss', 0):.4f}",
+                     "Punishes a confident wrong answer far harder than a hedged one."),
+                ])
                 inference(calibration["interpretation"], label="Calibration")
+                if calibration.get("scoring_note"):
+                    st.caption(calibration["scoring_note"])
                 dataframe(pd.DataFrame(calibration["bins"]))
+                st.caption(
+                    "Read the table as: of the rows where the model said roughly *mean "
+                    "predicted*, this share actually were positive. A well-calibrated model has "
+                    "those two columns tracking each other."
+                )
 
 with detail_tabs[4]:
+    # A classifier gives a probability; a decision needs a cut-off. The default
+    # of 0.5 is not a considered choice — it is what you get when nobody states
+    # what the two mistakes cost.
+    if not best.task_type.is_classification:
+        st.info(
+            "A decision threshold applies to classification. This model predicts a quantity, so "
+            "there is no cut-off to choose — the equivalent question is what error is tolerable, "
+            "which the prediction intervals on the **Score** page answer."
+        )
+    else:
+        scores = best.extras.get("holdout_score")
+        positive = best.extras.get("holdout_positive_label")
+        actual = best.extras.get("holdout_actual")
+        if not scores or positive is None or not actual:
+            st.info(
+                "This model does not produce a probability per row, so its output cannot be "
+                "thresholded. Its scores can still rank rows against each other."
+            )
+        else:
+            ai_panel(
+                "The model is the same at every threshold. What changes is which mistake you "
+                "make more of — and the right answer depends entirely on what each one costs "
+                "you, which is something only you can state.",
+                heading="AI Analyst · decision threshold",
+                why="A default of 0.5 assumes a false alarm and a missed positive cost the same. "
+                    "That is almost never true, and where it is not, no amount of model accuracy "
+                    "compensates for the wrong cut-off.",
+            )
+            currency = run.context.currency if run.context else "ZAR"
+            cost_columns = st.columns(4)
+            false_positive = cost_columns[0].number_input(
+                f"Cost of a false alarm ({currency})", min_value=0.0, value=100.0, step=50.0,
+                help="Acting on a row that turns out not to be a positive.",
+            )
+            false_negative = cost_columns[1].number_input(
+                f"Cost of missing one ({currency})", min_value=0.0, value=1000.0, step=100.0,
+                help="A real positive that was never flagged.",
+            )
+            intervention = cost_columns[2].number_input(
+                f"Cost of acting ({currency})", min_value=0.0, value=0.0, step=25.0,
+                help="What it costs to act on a flagged row, right or wrong.",
+            )
+            benefit = cost_columns[3].number_input(
+                f"Value of catching one ({currency})", min_value=0.0, value=0.0, step=100.0,
+                help="What a correctly caught positive is worth.",
+            )
+
+            costs = CostModel(
+                false_positive=false_positive, false_negative=false_negative,
+                intervention=intervention, true_positive_benefit=benefit, currency=currency,
+            )
+            analysis = analyse_thresholds(actual, scores, positive, costs)
+
+            if not analysis.usable:
+                caveat(analysis.note)
+            else:
+                inference(costs.describe(), label="What you told the platform")
+                metric_row([
+                    ("Recommended", f"{analysis.recommended.threshold:.2f}",
+                     "cheapest under the costs you stated"),
+                    ("Flags", f"{analysis.recommended.predicted_positive:,}",
+                     f"of {analysis.n:,} rows"),
+                    ("Catches", f"{analysis.recommended.caught_share:.0%}",
+                     "of actual positives"),
+                    ("Expected cost", f"{currency} {analysis.recommended.total_cost:,.0f}",
+                     f"against {currency} {analysis.default.total_cost:,.0f} at 0.5"),
+                ])
+                st.markdown(analysis.verdict())
+                chart(
+                    plots.line(
+                        pd.DataFrame({
+                            "Threshold": [p.threshold for p in analysis.points],
+                            f"Expected cost ({currency})": [p.total_cost for p in analysis.points],
+                        }),
+                        "Threshold", f"Expected cost ({currency})",
+                        title="Expected cost at each threshold", mode=theme,
+                    ),
+                    caption="The lowest point is the cheapest cut-off under the costs you "
+                            "supplied. Change the costs and the curve moves.",
+                    key="threshold_curve",
+                )
+                dataframe(analysis.table())
+
+with detail_tabs[5]:
     st.caption(
         "Why did the model give one particular row the answer it did? Useful when someone "
         "disputes a prediction, and the fastest way to catch a model relying on something absurd."
@@ -286,7 +388,7 @@ with detail_tabs[4]:
                     st.markdown("**The row itself**")
                     dataframe(X.iloc[[int(position)]])
 
-with detail_tabs[5]:
+with detail_tabs[6]:
     st.caption(
         "Whether collecting more of the same data would help, or whether the limit is the "
         "information in the features. These need different responses and are easy to confuse."
@@ -320,7 +422,7 @@ with detail_tabs[5]:
                 ("Scored on", curve["scoring"], ""),
             ])
 
-with detail_tabs[6]:
+with detail_tabs[7]:
     if best.hyperparameters:
         dataframe(pd.DataFrame([
             {"Parameter": k, "Value": str(v)} for k, v in best.hyperparameters.items()
@@ -331,11 +433,11 @@ with detail_tabs[6]:
     for i, step in enumerate(best.preprocessing, 1):
         st.markdown(f"{i}. {step}")
 
-with detail_tabs[7]:
+with detail_tabs[8]:
     decision_panel(run.decisions, stage="model_recommendation")
     decision_panel(run.decisions, stage="model_selection")
 
-with detail_tabs[8]:
+with detail_tabs[9]:
     from dsai.viz.recommender import explain_chart_choice, recommend_charts
 
     frame = state.typed_frame if state.typed_frame is not None else state.frame
