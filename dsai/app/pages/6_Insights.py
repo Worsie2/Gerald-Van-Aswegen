@@ -6,8 +6,9 @@ import pandas as pd
 import streamlit as st
 
 from dsai.app.components import (
-    ai_panel, apply_theme, caveat, chart, dataframe, finding_card, inference, metric_row,
-    page_header, rank_item, require_run, show_notices, sidebar_chrome, workflow_nav,
+    ai_panel, apply_theme, caveat, chart, dataframe, finding_card, inference, known_unknowns,
+    lineage_view, metric_row, page_header, rank_item, require_run, show_notices, sidebar_chrome,
+    trust_panel, workflow_nav,
 )
 from dsai.app.state import workspace
 from dsai.core.schema import EvidenceKind
@@ -46,6 +47,12 @@ order = [
     "Your assumptions (not verified)",
 ]
 
+if run.trust is not None:
+    st.markdown("### Why trust these findings?")
+    trust_panel(run.trust)
+    known_unknowns(run.trust)
+    st.divider()
+
 ai_panel(
     f"I found **{len(run.findings)} finding(s)** in this analysis. They are ordered by how strong "
     "the evidence behind each one is — what was measured first, what a statistical test "
@@ -82,6 +89,8 @@ with read_tab:
                       else "neutral")]
             if finding.caveats:
                 marks.append(("has caveats", "warning"))
+            if finding.id:
+                marks.append((finding.id, "neutral"))
             rank_item(
                 _position, finding.title,
                 body=finding.detail
@@ -90,6 +99,28 @@ with read_tab:
                 badges=marks,
                 lead=_position == 1,
             )
+            if run.ledger is not None and finding.id:
+                supporting = run.ledger.evidence_for(finding.id)
+                if supporting:
+                    with st.expander(f"Where {finding.id} comes from"):
+                        st.caption(
+                            "Every number behind this claim, with its kind, and the run, model, "
+                            "pipeline and dataset it came from. The identifiers are derived from "
+                            "the content, so they stay the same across runs and exports."
+                        )
+                        lineage_view(
+                            [{"level": "Finding", "id": finding.id, "label": finding.title,
+                              "kind": ""}]
+                            + [{"level": "Evidence", "id": e.id, "label": e.statement,
+                                "kind": e.kind.value.replace("_", " ")} for e in supporting]
+                            + [{"level": "Run", "id": run.id, "label": run.ledger.fingerprint,
+                                "kind": ""},
+                               {"level": "Model", "id": "", "label": run.ledger.model, "kind": ""},
+                               {"level": "Pipeline", "id": "", "label": run.ledger.pipeline,
+                                "kind": ""},
+                               {"level": "Dataset", "id": "", "label": run.ledger.dataset,
+                                "kind": ""}]
+                        )
 
 with cards_tab:
     for heading in order:

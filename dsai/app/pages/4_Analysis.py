@@ -5,10 +5,11 @@ from __future__ import annotations
 import streamlit as st
 
 from dsai.app.components import (
-    ai_panel, apply_theme, caveat, chart, decision_panel, error_state, inference, leaderboard,
-    live_stages, metric_row, override_notice, page_header, rank_item, require_data, show_notices,
-    sidebar_chrome, skeleton, trace_view, workflow_nav,
+    ai_panel, apply_theme, badge, caveat, chart, decision_panel, error_state, inference,
+    leaderboard, live_stages, metric_row, override_notice, page_header, rank_item, require_data,
+    show_notices, sidebar_chrome, simple_table, skeleton, status_bar, trace_view, workflow_nav,
 )
+from dsai.engines.brief import build_brief, build_contract
 from dsai.viz.theme import AI_MARK
 from dsai.app.state import scientist, workspace
 from dsai.core.schema import Objective, TaskType
@@ -312,9 +313,54 @@ metric_row([
 for warning in plan.warnings:
     caveat(warning)
 
-candidates_tab, table_tab, reasoning_tab = st.tabs(
-    ["Candidate models", "As a table", "Why these choices"]
+# The brief comes first: someone should be able to approve or reject the work
+# before it runs, without reading a model shortlist.
+brief = build_brief(profile, objective, plan, state.context, frame)
+contract = build_contract(profile, objective, frame)
+
+verdict_tone = {"suitable": "good", "caution": "warning", "unsuitable": "critical"}[brief.verdict]
+st.markdown(
+    f'### Analysis brief &nbsp; {badge(brief.verdict_label, verdict_tone)}',
+    unsafe_allow_html=True,
 )
+if brief.verdict == "unsuitable":
+    error_state(
+        "This data cannot defensibly answer this question",
+        "  \n".join(f"- {r}" for r in brief.verdict_reasons),
+        "Change the objective above, fix what is flagged on the **Data** page, or accept that "
+        "the honest answer here is that the data will not support a conclusion. Running it "
+        "anyway will still produce numbers.",
+    )
+elif brief.verdict == "caution":
+    caveat(
+        "This will run and produce results. The reasons below are what a reader should be told "
+        "alongside them.",
+        label="Proceed with caution",
+    )
+
+brief_tab, contract_tab, candidates_tab, table_tab, reasoning_tab = st.tabs(
+    ["The brief", "Data contract", "Candidate models", "As a table", "Why these choices"]
+)
+
+with brief_tab:
+    st.markdown(brief.render())
+
+with contract_tab:
+    st.caption(
+        "What this analysis requires of its data. Stored with the run and checked again when new "
+        "rows arrive to be scored — a model is only valid on data meeting the contract it was "
+        "trained under."
+    )
+    simple_table([
+        {"Requirement": check.requirement,
+         "Status": ("met" if check.passed
+                    else "NOT MET — stops the analysis" if check.severity == "blocking"
+                    else "raised"),
+         "Detail": check.detail}
+        for check in contract.checks
+    ])
+    if not contract.satisfied:
+        caveat(contract.summary(), label="Contract not satisfied")
 with candidates_tab:
     ai_panel(
         f"Based on your objective and this dataset, I would evaluate these "

@@ -213,7 +213,15 @@ class ModelRegistry:
         only_available: bool = True,
         tags: list[str] | None = None,
     ) -> list[ModelSpec]:
-        """Filter the registry down to the specs that fit the situation."""
+        """Filter the registry down to the specs that fit the situation.
+
+        Loads the bundled algorithm packs first if nothing has registered yet.
+        An empty registry answers every query with "nothing suits your data",
+        which is indistinguishable from a real verdict and sends the reader
+        looking for a problem in their dataset that is not there.
+        """
+        if not self._specs:
+            load_builtin_models()
         out: list[ModelSpec] = []
         for spec in self._specs.values():
             if task_type is not None and task_type not in spec.task_types:

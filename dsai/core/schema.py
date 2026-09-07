@@ -377,6 +377,9 @@ class Finding(JsonMixin):
     title: str
     detail: str
     kind: EvidenceKind
+    #: Stable, content-derived identifier. Assigned by the evidence ledger so a
+    #: claim can be cited and traced after it has left the application.
+    id: str = ""
     evidence: list[str] = field(default_factory=list)
     confidence: Confidence = Confidence.MODERATE
     columns: list[str] = field(default_factory=list)
@@ -388,6 +391,8 @@ class Finding(JsonMixin):
 class Recommendation(JsonMixin):
     action: str
     reason: str
+    #: Stable, content-derived identifier. See Finding.id.
+    id: str = ""
     evidence: list[str] = field(default_factory=list)
     confidence: Confidence = Confidence.MODERATE
     expected_impact: str = ""

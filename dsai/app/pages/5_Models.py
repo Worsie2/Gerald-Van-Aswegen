@@ -11,6 +11,7 @@ from dsai.app.components import (
     workflow_nav,
 )
 from dsai.app.state import scientist, workspace
+from dsai.reporting.model_card import build_model_card
 from dsai.core.schema import TaskType
 from dsai.engines import metrics as M
 from dsai.viz import plots
@@ -129,7 +130,7 @@ metric_row([
 ])
 
 detail_tabs = st.tabs(
-    ["Performance", "Explanation", "Diagnostics", "Why this row?", "More data?",
+    ["Performance", "Model card", "Explanation", "Diagnostics", "Why this row?", "More data?",
      "Hyper-parameters", "Decision log", "Charts"]
 )
 
@@ -156,6 +157,22 @@ with detail_tabs[0]:
         caveat(warning)
 
 with detail_tabs[1]:
+    # A trained model outlives the conversation that produced it. The card is
+    # what lets someone decide six months later whether to use it.
+    card = build_model_card(run, best, frame=state.typed_frame)
+    st.caption(
+        "Generated from the run itself, so it cannot drift away from what the model actually is. "
+        "The section worth reading twice is *inappropriate uses* — every card lists what a model "
+        "is good at; models fail where nobody thought to look."
+    )
+    st.markdown(card.to_markdown())
+    st.download_button(
+        "Model card (.md)", card.to_markdown(),
+        file_name=f"{run.dataset_name}_{best.model_key}_model_card.md",
+        mime="text/markdown",
+    )
+
+with detail_tabs[2]:
     if run.explanation is None:
         st.info("No explanation was generated for this model type.")
     else:
@@ -192,7 +209,7 @@ with detail_tabs[1]:
             else:
                 st.info(curve.get("reason", "Not available for this variable."))
 
-with detail_tabs[2]:
+with detail_tabs[3]:
     if not run.diagnostics or not run.diagnostics.get("usable", True):
         st.info("No diagnostics available for this model type.")
     else:
@@ -229,7 +246,7 @@ with detail_tabs[2]:
                 inference(calibration["interpretation"], label="Calibration")
                 dataframe(pd.DataFrame(calibration["bins"]))
 
-with detail_tabs[3]:
+with detail_tabs[4]:
     st.caption(
         "Why did the model give one particular row the answer it did? Useful when someone "
         "disputes a prediction, and the fastest way to catch a model relying on something absurd."
@@ -269,7 +286,7 @@ with detail_tabs[3]:
                     st.markdown("**The row itself**")
                     dataframe(X.iloc[[int(position)]])
 
-with detail_tabs[4]:
+with detail_tabs[5]:
     st.caption(
         "Whether collecting more of the same data would help, or whether the limit is the "
         "information in the features. These need different responses and are easy to confuse."
@@ -303,7 +320,7 @@ with detail_tabs[4]:
                 ("Scored on", curve["scoring"], ""),
             ])
 
-with detail_tabs[5]:
+with detail_tabs[6]:
     if best.hyperparameters:
         dataframe(pd.DataFrame([
             {"Parameter": k, "Value": str(v)} for k, v in best.hyperparameters.items()
@@ -314,11 +331,11 @@ with detail_tabs[5]:
     for i, step in enumerate(best.preprocessing, 1):
         st.markdown(f"{i}. {step}")
 
-with detail_tabs[6]:
+with detail_tabs[7]:
     decision_panel(run.decisions, stage="model_recommendation")
     decision_panel(run.decisions, stage="model_selection")
 
-with detail_tabs[7]:
+with detail_tabs[8]:
     from dsai.viz.recommender import explain_chart_choice, recommend_charts
 
     frame = state.typed_frame if state.typed_frame is not None else state.frame

@@ -5,8 +5,8 @@ from __future__ import annotations
 import streamlit as st
 
 from dsai.app.components import (
-    ai_panel, apply_theme, caveat, error_state, page_header, rank_item, recommendation_card,
-    require_run, show_notices, sidebar_chrome, workflow_nav,
+    ai_panel, apply_theme, caveat, error_state, lineage_view, page_header, rank_item,
+    recommendation_card, require_run, show_notices, sidebar_chrome, workflow_nav,
 )
 from dsai.app.state import workspace
 from dsai.engines.recommend import group_by_category
@@ -73,6 +73,8 @@ for tab, heading in zip(tabs, present):
                 if level in impact:
                     marks.append(mark)
                     break
+            if recommendation.id:
+                marks.append((recommendation.id, "neutral"))
             rank_item(
                 index, recommendation.action,
                 body="**Why.** " + recommendation.reason
@@ -84,6 +86,18 @@ for tab, heading in zip(tabs, present):
                 badges=marks,
                 lead=index == 1 and heading == present[0],
             )
+        if run.ledger is not None:
+            with st.expander("Where these come from"):
+                st.caption(
+                    "Each action traced back through the findings it rests on, to the evidence, "
+                    "the run, the model, the pipeline and the dataset."
+                )
+                for recommendation in grouped[heading]:
+                    if not recommendation.id:
+                        continue
+                    st.markdown(f"**{recommendation.id}** — {recommendation.action}")
+                    lineage_view(run.ledger.chain(recommendation.id))
+
         with st.expander("The same recommendations as cards"):
             for index, recommendation in enumerate(grouped[heading]):
                 recommendation_card(recommendation, index)

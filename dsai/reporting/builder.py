@@ -109,11 +109,18 @@ def build_report(
         sections.append(("Selected model and performance", _performance_section(run)))
         sections.append(("What drives the outcome", _drivers_section(run)))
     sections.append(("Key findings", _findings_section(run)))
+    # Placed straight after the findings, not in an appendix: whether to believe
+    # a conclusion is not a footnote to the conclusion.
+    sections.append(("Why trust this", _trust_section(run)))
     if audience == "technical":
         sections.append(("Recommendations", _recommendations_section(run, plain=False)))
     sections.append(("Risks and limitations", _limitations_section(run)))
     sections.append(("Suggested next analyses", _next_steps_section(run)))
     if include_methodology:
+        sections.append(("The analysis brief", _brief_section(run)))
+        sections.append(("Data contract", _contract_section(run)))
+        sections.append(("Evidence ledger", _evidence_section(run)))
+        sections.append(("Model card", _model_card_section(run)))
         sections.append(("Methodology", _methodology_section(run)))
         sections.append(("The calculations", _calculations_section(run)))
         sections.append(("Did it run cleanly", _run_integrity_section(run)))
@@ -694,6 +701,125 @@ def _next_steps_section(run: Any) -> str:
 # on the way. A reader who cannot check the second set has to take the first on
 # trust.
 # --------------------------------------------------------------------------
+
+def _trust_section(run: Any) -> str:
+    """How far this can be trusted, and what nothing here can settle."""
+    trust = getattr(run, "trust", None)
+    if trust is None:
+        return ""
+    lines = [
+        f"**Evidence strength: {trust.score}/100 — {trust.band}.** "
+        f"Assumption debt {trust.assumption_debt}/100 ({trust.debt_band}).",
+        "",
+        "Evidence strength is a weighted summary of the validation checks that passed and "
+        f"failed. It is **not** a statistical confidence level: it does not mean there is an "
+        f"{trust.score}% chance the conclusion is right.",
+        "",
+        trust.verdict,
+        "",
+    ]
+    if trust.supporting:
+        lines += ["**Supporting**", ""] + [f"- {f.statement}" for f in trust.supporting] + [""]
+    if trust.reducing:
+        lines += ["**Reducing confidence**", ""] + [f"- {f.statement}" for f in trust.reducing] + [""]
+    if trust.unknowns:
+        lines += [
+            "**What this analysis cannot tell you**",
+            "",
+            "Not deficiencies to be fixed — the boundary of what this design can establish.",
+            "",
+        ] + [f"- {u}" for u in trust.unknowns] + [""]
+    if trust.debt_items:
+        lines += [
+            "**Assumption debt**",
+            "",
+            "What would have to be true for the conclusion to hold, and has not been shown.",
+            "",
+        ] + [f"- {item}" for item in trust.debt_items]
+    return "\n".join(lines)
+
+
+def _brief_section(run: Any) -> str:
+    """The plan as it stood before the work, with its verdict."""
+    brief = getattr(run, "brief", None)
+    if brief is None:
+        return ""
+    return brief.render()
+
+
+def _contract_section(run: Any) -> str:
+    """What the analysis required of its data, and whether it got it."""
+    contract = getattr(run, "contract", None)
+    if contract is None:
+        return ""
+    lines = [
+        contract.summary(),
+        "",
+        "These requirements are stored with the run and checked again whenever new data is "
+        "scored: a model is valid only on data meeting the contract it was trained under.",
+        "",
+        "| Requirement | Status | Detail |",
+        "| --- | --- | --- |",
+    ]
+    for check in contract.checks:
+        status = ("met" if check.passed
+                  else "**not met — blocking**" if check.severity == "blocking"
+                  else "raised")
+        lines.append(f"| {check.requirement} | {status} | {check.detail.replace('|', chr(92) + '|')} |")
+    return "\n".join(lines)
+
+
+def _evidence_section(run: Any) -> str:
+    """Every claim with an identifier, and what it rests on."""
+    ledger = getattr(run, "ledger", None)
+    if ledger is None or not ledger.items:
+        return ""
+    lines = [
+        f"Every finding and recommendation carries an identifier derived from its own content, so "
+        f"a claim can be cited and traced after it has left this report. This run holds "
+        f"**{len(ledger.items)} piece(s) of evidence** behind **{len(ledger.supports)} finding(s)**.",
+        "",
+        f"Run `{ledger.run_id}` · fingerprint `{ledger.fingerprint}` · model {ledger.model} · "
+        f"pipeline {ledger.pipeline} · dataset {ledger.dataset}",
+        "",
+        f"{ledger.measured_share:.0%} of the evidence is measurement (counted or tested); the "
+        "rest is model-derived, interpretation, or something you told the platform.",
+        "",
+    ]
+    for finding in run.findings:
+        if not finding.id:
+            continue
+        lines += [f"**{finding.id} — {finding.title}**", ""]
+        supporting = ledger.evidence_for(finding.id)
+        if supporting:
+            lines += [f"- `{item.id}` {item.statement} *({item.kind.value.replace('_', ' ')})*"
+                      for item in supporting]
+        else:
+            lines.append("- *(no structured evidence recorded)*")
+        for caveat in finding.caveats[:2]:
+            lines.append(f"- Limit: {caveat}")
+        lines.append("")
+
+    linked = [(r, ledger.rests_on.get(r.id, [])) for r in run.recommendations if r.id]
+    if linked:
+        lines += ["**Recommendations and what they rest on**", "",
+                  "| ID | Action | Rests on |", "| --- | --- | --- |"]
+        for recommendation, findings in linked:
+            names = ", ".join(f"`{f}`" for f in findings) or "—"
+            lines.append(f"| `{recommendation.id}` | {recommendation.action} | {names} |")
+    return "\n".join(lines)
+
+
+def _model_card_section(run: Any) -> str:
+    if run.best is None:
+        return ""
+    try:
+        from dsai.reporting.model_card import build_model_card
+
+        return build_model_card(run).to_markdown().split("\n", 1)[1].strip()
+    except Exception:
+        return ""
+
 
 def _methodology_section(run: Any) -> str:
     """The method in full: the design, the split, the metrics and their definitions."""

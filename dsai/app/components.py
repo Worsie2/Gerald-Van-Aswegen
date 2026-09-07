@@ -737,6 +737,78 @@ label, [data-testid="stWidgetLabel"] p {{
   margin:0; font-size:var(--t-caption); color:var(--ink); font-variant-numeric:tabular-nums;
 }}
 
+/* ---- trust panel ----
+   A score is meaningless without the list it came from, so the two are one
+   component and the list cannot be collapsed away from the number. */
+.dsai-trust {{
+  border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface);
+  padding:1.1rem 1.2rem; margin:var(--s-md) 0 var(--s-lg);
+}}
+.dsai-trust-head {{ display:flex; align-items:baseline; gap:1.1rem; flex-wrap:wrap; }}
+.dsai-trust-score {{
+  font-size:2.1rem; font-weight:600; letter-spacing:-.03em; line-height:1; color:var(--ink);
+  font-variant-numeric:tabular-nums;
+}}
+.dsai-trust-of {{ font-size:.95rem; color:var(--ink-3); font-weight:500; }}
+.dsai-trust-caption {{
+  font-size:var(--t-eyebrow); text-transform:uppercase; letter-spacing:.08em;
+  font-weight:600; color:var(--ink-3);
+}}
+.dsai-trust-verdict {{
+  margin-top:.7rem; font-size:var(--t-body); line-height:1.6; color:var(--ink); max-width:66ch;
+}}
+.dsai-trust-cols {{ display:flex; gap:var(--s-xl); flex-wrap:wrap; margin-top:1rem; }}
+.dsai-trust-col {{ flex:1 1 18rem; min-width:15rem; }}
+.dsai-trust-col h4 {{
+  font-size:var(--t-eyebrow); text-transform:uppercase; letter-spacing:.08em;
+  font-weight:700; color:var(--ink-3); margin:0 0 .45rem;
+}}
+.dsai-trust-item {{
+  display:flex; gap:.5rem; align-items:baseline; padding:.2rem 0;
+  font-size:var(--t-caption); line-height:1.55; color:var(--ink-2);
+}}
+.dsai-trust-mark {{ font-family:var(--mono); font-size:.72rem; flex:0 0 .9rem; }}
+.dsai-trust-item[data-kind="up"] .dsai-trust-mark {{ color:var(--good); }}
+.dsai-trust-item[data-kind="down"] .dsai-trust-mark {{ color:var(--warning); }}
+
+/* ---- analysis status bar ---- */
+.dsai-status {{
+  display:flex; gap:.35rem; flex-wrap:wrap; align-items:stretch;
+  margin:.2rem 0 1.4rem;
+}}
+.dsai-status-cell {{
+  flex:1 1 6rem; min-width:5.5rem; padding:.42rem .6rem;
+  border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface);
+}}
+.dsai-status-name {{
+  font-size:var(--t-eyebrow); text-transform:uppercase; letter-spacing:.07em;
+  font-weight:700; color:var(--ink-3); display:block;
+}}
+.dsai-status-value {{
+  font-size:var(--t-caption); color:var(--ink-2); display:flex; align-items:baseline; gap:.3rem;
+}}
+.dsai-status-cell[data-state="done"] {{ border-color:var(--good); }}
+.dsai-status-cell[data-state="done"] .dsai-status-value {{ color:var(--ink); font-weight:600; }}
+.dsai-status-cell[data-state="warn"] {{ border-color:var(--warning); }}
+.dsai-status-cell[data-state="blocked"] {{ border-color:var(--critical); }}
+.dsai-status-cell[data-state="todo"] {{ border-style:dashed; }}
+
+/* ---- lineage ---- */
+.dsai-lineage {{ margin:.5rem 0 1rem; }}
+.dsai-lineage-row {{
+  display:grid; grid-template-columns:7.5rem 5rem 1fr; gap:var(--s-md);
+  align-items:baseline; padding:.35rem 0; border-bottom:1px solid var(--border);
+  font-size:var(--t-caption);
+}}
+.dsai-lineage-row:last-child {{ border-bottom:none; }}
+.dsai-lineage-level {{
+  font-size:var(--t-eyebrow); text-transform:uppercase; letter-spacing:.07em;
+  font-weight:700; color:var(--ink-3);
+}}
+.dsai-lineage-id {{ font-family:var(--mono); font-size:.72rem; color:var(--accent-ink); }}
+.dsai-lineage-label {{ color:var(--ink); line-height:1.5; }}
+.dsai-lineage-kind {{ color:var(--ink-3); }}
+
 /* ---- structural accessibility: always present, not a preference ---- */
 .dsai-skip {{
   position:absolute; left:-9999px; top:0; z-index:9999;
@@ -926,6 +998,7 @@ def _navigation() -> None:
     sections = st.session_state.get("_dsai_sections")
     if not sections:
         return
+    notes = _nav_status(st.session_state.get("dsai_workspace"))
     for heading, pages in sections.items():
         if heading:
             st.markdown(
@@ -934,7 +1007,69 @@ def _navigation() -> None:
             )
         for page in pages:
             st.page_link(page, label=page.title)
+            note = notes.get(page.title)
+            if note:
+                # The rail doubles as a status display: a page that needs
+                # attention says so where the user is already looking, rather
+                # than only once they open it.
+                st.markdown(
+                    f'<div style="font-size:.68rem;color:var(--ink-3);margin:-.35rem 0 .3rem '
+                    f'1.05rem;line-height:1.3">{_esc(note)}</div>',
+                    unsafe_allow_html=True,
+                )
     st.divider()
+
+
+def _nav_status(state: Any) -> dict[str, str]:
+    """A short status line for the pages that have something to say.
+
+    Deliberately sparse. A marker beside every item is wallpaper; a marker
+    beside two is a signal.
+    """
+    if state is None:
+        return {}
+    notes: dict[str, str] = {}
+    profile = getattr(state, "profile", None)
+    run = getattr(state, "run", None)
+
+    if profile is not None:
+        critical = profile.issues_by_severity("critical")
+        if critical:
+            notes["1 · Data"] = f"{len(critical)} critical issue(s)"
+        elif profile.leakage_suspects:
+            notes["1 · Data"] = f"{len(profile.leakage_suspects)} leakage suspect(s)"
+
+    context = getattr(state, "context", None)
+    if context is not None and context.is_empty and getattr(state, "has_data", False):
+        notes["2 · Context"] = "nothing told to the platform yet"
+
+    if getattr(state, "has_data", False) and getattr(state, "pipeline", None) is None:
+        notes["3 · Preprocessing"] = "no pipeline built"
+
+    if getattr(state, "objective", None) is None and getattr(state, "has_data", False):
+        notes["4 · Analysis"] = "objective not set"
+
+    if run is None:
+        if getattr(state, "has_data", False):
+            notes.setdefault("5 · Models", "nothing run yet")
+        return notes
+
+    if run.best is None:
+        notes["5 · Models"] = "no model completed"
+    elif run.self_check is not None and run.self_check.blocking:
+        notes["5 · Models"] = f"{len(run.self_check.blocking)} blocking check(s)"
+    elif run.trust is not None:
+        notes["5 · Models"] = f"evidence strength {run.trust.score}/100"
+
+    if run.findings:
+        notes["6 · Insights"] = f"{len(run.findings)} finding(s)"
+    if run.recommendations:
+        notes["7 · Recommendations"] = f"{len(run.recommendations)} action(s)"
+    if run.best is not None:
+        notes["8 · Score new data"] = "model ready"
+    if len(getattr(state, "runs", [])) >= 2:
+        notes["Projects"] = f"{len(state.runs)} runs to compare"
+    return notes
 
 
 def sidebar_chrome(state: Any, working: str = "") -> None:
@@ -1338,6 +1473,183 @@ def top_strip(state: Any, working: str = "") -> None:
         "</div>",
         unsafe_allow_html=True,
     )
+
+
+def trust_panel(assessment: Any, compact: bool = False) -> None:
+    """Why this result can or cannot carry weight, with the workings beside the score.
+
+    The score and the list are one component on purpose. A number on its own
+    invites the reader to treat an analyst's summary as a probability; the list
+    is what makes it checkable, so it cannot be collapsed away.
+    """
+    import streamlit as st
+
+    if assessment is None:
+        return
+
+    parts = [
+        '<div class="dsai-trust">',
+        '<div class="dsai-trust-head">',
+        f'<span class="dsai-trust-score">{assessment.score}</span>'
+        '<span class="dsai-trust-of">/ 100</span>',
+        f'<span class="dsai-trust-caption">Evidence strength · {_esc(assessment.band)}</span>',
+        f'<span class="dsai-trust-caption" style="margin-left:auto">'
+        f'Assumption debt {assessment.assumption_debt} · {_esc(assessment.debt_band)}</span>',
+        "</div>",
+        f'<div class="dsai-trust-verdict">{_rich(assessment.verdict)}</div>',
+    ]
+
+    if not compact:
+        columns = ['<div class="dsai-trust-cols">']
+        for heading, factors, kind, mark in [
+            ("Supporting", assessment.supporting, "up", "+"),
+            ("Reducing confidence", assessment.reducing, "down", "!"),
+        ]:
+            if not factors:
+                continue
+            rows = "".join(
+                f'<div class="dsai-trust-item" data-kind="{kind}"'
+                + (f' title="{_esc(f.detail)}"' if f.detail else "")
+                + f'><span class="dsai-trust-mark" aria-hidden="true">{mark}</span>'
+                f"<span>{_esc(f.statement)}</span></div>"
+                for f in factors
+            )
+            columns.append(f'<div class="dsai-trust-col"><h4>{heading}</h4>{rows}</div>')
+        columns.append("</div>")
+        parts.append("".join(columns))
+
+    parts.append("</div>")
+    st.markdown("".join(parts), unsafe_allow_html=True)
+
+    st.caption(
+        "Evidence strength is a weighted summary of the validation checks that passed and "
+        "failed. It is **not** a statistical confidence level and does not mean there is an "
+        f"{assessment.score}% chance the conclusion is right."
+    )
+
+
+def known_unknowns(assessment: Any) -> None:
+    """What this analysis cannot answer, whatever its numbers look like."""
+    import streamlit as st
+
+    if assessment is None or not assessment.unknowns:
+        return
+    st.markdown(
+        '<div class="dsai-inference"><span class="dsai-inference-label">'
+        "What this analysis cannot tell you</span>"
+        + "".join(f'<div class="dsai-inference-body" style="margin-top:.35rem">— {_rich(u)}</div>'
+                  for u in assessment.unknowns)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+#: The analytical stages, in order, and what each one means.
+STATUS_STAGES = [
+    ("Data", "A dataset is loaded and profiled"),
+    ("Question", "An objective has been set"),
+    ("Prepare", "A preprocessing pipeline exists"),
+    ("Model", "Models have been trained and compared"),
+    ("Validate", "The self-checks have run"),
+    ("Explain", "The winner has been explained"),
+    ("Decide", "Recommendations exist"),
+]
+
+
+def analysis_state(state: Any) -> dict[str, tuple[str, str]]:
+    """Where the analysis actually stands, stage by stage.
+
+    Read from the workspace rather than from which page is open: the point of a
+    status bar is to say what has happened, not where the user is standing.
+    """
+    run = getattr(state, "run", None)
+    out: dict[str, tuple[str, str]] = {}
+
+    profile = getattr(state, "profile", None)
+    if getattr(state, "has_data", False):
+        critical = len(profile.issues_by_severity("critical")) if profile else 0
+        out["Data"] = ("warn", f"{critical} critical") if critical else ("done", "ready")
+    else:
+        out["Data"] = ("todo", "none")
+
+    objective = getattr(state, "objective", None)
+    out["Question"] = ("done", objective.task_type.value.replace("_", " ")) if objective         else ("todo", "not set")
+
+    pipeline = getattr(state, "pipeline", None)
+    out["Prepare"] = ("done", f"{len(pipeline.active_steps)} steps") if pipeline is not None         else ("todo", "none")
+
+    if run is None:
+        out["Model"] = ("todo", "not run")
+        out["Validate"] = ("todo", "—")
+        out["Explain"] = ("todo", "—")
+        out["Decide"] = ("todo", "—")
+        return out
+
+    out["Model"] = ("done", f"{len(run.results)} trained") if run.best is not None         else ("blocked", "no model")
+
+    check = run.self_check
+    if check is None:
+        out["Validate"] = ("todo", "not run")
+    elif check.blocking:
+        out["Validate"] = ("blocked", f"{len(check.blocking)} blocking")
+    else:
+        failed = [c for c in check.checks if not c.passed]
+        out["Validate"] = ("warn", f"{len(failed)} raised") if failed else ("done", "all passed")
+
+    out["Explain"] = ("done", run.explanation.method) if run.explanation is not None         else ("todo", "—")
+    out["Decide"] = ("done", f"{len(run.recommendations)} actions") if run.recommendations         else ("todo", "none")
+    return out
+
+
+_STATUS_MARK = {"done": "✓", "warn": "!", "blocked": "×", "todo": "·"}
+
+
+def status_bar(state: Any) -> None:
+    """The analytical state of the project, as seven cells.
+
+    State is carried by a border, a glyph and a word — never by colour alone,
+    so it survives a colour-blind reader and a black-and-white print.
+    """
+    import streamlit as st
+
+    stages = analysis_state(state)
+    cells = []
+    for name, meaning in STATUS_STAGES:
+        status, detail = stages.get(name, ("todo", "—"))
+        mark = _STATUS_MARK[status]
+        spoken = {"done": "done", "warn": "needs attention", "blocked": "blocked",
+                  "todo": "not started"}[status]
+        cells.append(
+            f'<div class="dsai-status-cell" data-state="{status}" '
+            f'title="{_esc(meaning)}">'
+            f'<span class="dsai-status-name">{_esc(name)}</span>'
+            f'<span class="dsai-status-value"><span aria-hidden="true">{mark}</span>'
+            f"{_esc(detail)}</span>"
+            f'<span class="dsai-sr"> — {spoken}</span></div>'
+        )
+    st.markdown(
+        f'<div class="dsai-status" role="group" aria-label="Analysis status">{"".join(cells)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def lineage_view(rows: list[dict[str, Any]]) -> None:
+    """A claim traced back through evidence, run, model, pipeline and dataset."""
+    import streamlit as st
+
+    if not rows:
+        return
+    body = "".join(
+        f'<div class="dsai-lineage-row">'
+        f'<span class="dsai-lineage-level">{_esc(row["level"])}</span>'
+        f'<span class="dsai-lineage-id">{_esc(row.get("id", "") or "—")}</span>'
+        f'<span class="dsai-lineage-label">{_esc(row.get("label", ""))}'
+        + (f' <span class="dsai-lineage-kind">({_esc(row["kind"])})</span>'
+           if row.get("kind") else "")
+        + "</span></div>"
+        for row in rows
+    )
+    st.markdown(f'<div class="dsai-lineage">{body}</div>', unsafe_allow_html=True)
 
 
 def badge(text: str, tone: str = "neutral") -> str:

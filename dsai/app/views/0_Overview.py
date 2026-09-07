@@ -7,7 +7,8 @@ import streamlit as st
 import datetime as _dt
 
 from dsai.app.components import (
-    ai_panel, apply_theme, caveat, metric_row, page_header, quality_bars, sidebar_chrome,
+    ai_panel, apply_theme, caveat, error_state, known_unknowns, metric_row, page_header,
+    quality_bars, sidebar_chrome, status_bar, trust_panel,
 )
 from dsai.app.quality import quality_breakdown
 from dsai.app.state import workspace
@@ -32,33 +33,26 @@ if state.has_data:
     greeting = "Good morning" if hour < 12 else "Good afternoon" if hour < 18 else "Good evening"
 
     page_header(state.dataset_name or "Untitled project", "", greeting)
+    status_bar(state)
 
-    figures: list[tuple[str, str, str]] = [
-        ("Rows", f"{profile.n_rows:,}", f"{profile.n_columns} variables"),
-        ("Data quality", f"{profile.quality_score:.0f}/100",
-         f"{len(profile.quality_issues)} issue(s) flagged" if profile.quality_issues
-         else "nothing flagged"),
-    ]
-    if run is not None and run.tournament is not None:
-        figures.append(("Models tested", str(len(run.results)),
-                        f"ranked on {run.plan.primary_metric}" if run.plan else ""))
-        if run.best is not None:
-            figures.append(("Best on this dataset", run.best.model_name,
-                            "under the validation strategy used"))
-    else:
-        figures.append(("Models tested", "—", "no analysis run yet"))
-        figures.append(("Questions found", str(len(state.objectives)),
-                        "detected from the data"))
-    metric_row(figures)
-
-    # What the platform makes of where things stand, and the single next move.
+    # ---------------------------------------------------------------------
+    # Nothing analysed yet: the page is about getting there.
+    # ---------------------------------------------------------------------
     if run is None:
         lead = state.objectives[0] if state.objectives else None
+        metric_row([
+            ("Rows", f"{profile.n_rows:,}", f"{profile.n_columns} variables"),
+            ("Data quality", f"{profile.quality_score:.0f}/100",
+             f"{len(profile.quality_issues)} issue(s) flagged" if profile.quality_issues
+             else "nothing flagged"),
+            ("Questions found", str(len(state.objectives)), "detected from the data"),
+            ("Analysed", "not yet", "the plan is shown before anything runs"),
+        ])
         ai_panel(
             f"**{state.dataset_name}** is loaded and profiled. "
             + (f"The strongest question it can answer is **{lead.label().replace('_', ' ')}**. "
                if lead else "")
-            + "Nothing has been analysed yet — the plan is shown in full before anything runs.",
+            + "Nothing has been analysed yet.",
             why=(lead.rationale if lead else ""),
             evidence=[
                 f"{profile.n_rows:,} rows × {profile.n_columns} columns",
@@ -68,46 +62,136 @@ if state.has_data:
             confidence=(lead.confidence if lead else None),
         )
         st.page_link("pages/4_Analysis.py", label="Set up the analysis →")
-    else:
-        top = run.findings[0] if run.findings else None
-        action = run.recommendations[0] if run.recommendations else None
-        ai_panel(
-            f"I ran **{len(run.results)} model(s)** and kept **{run.best.model_name}** as the "
-            f"best-performing on this dataset under the validation strategy used"
-            + (f". I found **{len(run.findings)} finding(s)** and **{len(run.recommendations)} "
-               f"recommendation(s)**." if run.findings else ".")
-            if run.best else "The run finished without a usable model.",
-            why=(f"**{top.title}** — {top.detail}" if top else ""),
-            evidence=([action.action] if action else []),
-            confidence=(top.confidence if top else None),
-        )
-        links = st.columns([1, 1, 1, 1, 2])
-        links[0].page_link("pages/5_Models.py", label="The comparison →")
-        links[1].page_link("pages/6_Insights.py", label="Findings →")
-        links[2].page_link("pages/7_Recommendations.py", label="What to do →")
-        links[3].page_link("pages/9_Report.py", label="Report →")
 
-    # Quality, as bars, because a score with no breakdown is not actionable.
+        st.divider()
+        left, right = st.columns([3, 2], gap="large")
+        with left:
+            st.markdown("### Data quality")
+            quality_bars(quality_breakdown(profile))
+            if profile.quality_issues:
+                st.caption(f"{len(profile.quality_issues)} issue(s) — the **Data** page works "
+                           "through them.")
+        with right:
+            st.markdown("### What this data could answer")
+            for objective in state.objectives[:5]:
+                st.markdown(
+                    f'<div style="font-size:.8125rem;padding:.3rem 0;'
+                    f'border-bottom:1px solid var(--border)">'
+                    f'<strong style="color:var(--ink)">{objective.label().replace("_", " ")}</strong>'
+                    f'<br><span style="color:var(--ink-3)">{objective.rationale[:110]}</span></div>',
+                    unsafe_allow_html=True,
+                )
+        st.stop()
+
+    # ---------------------------------------------------------------------
+    # An analysis exists: lead with the answer, then whether to believe it.
+    # ---------------------------------------------------------------------
+    headline = run.findings[0] if run.findings else None
+    action = run.recommendations[0] if run.recommendations else None
+
+    st.markdown("### The answer")
+    if headline is not None:
+        st.markdown(
+            f'<div class="dsai-rank-title" style="font-size:1.35rem;line-height:1.35;'
+            f'max-width:60ch">{headline.title}</div>'
+            f'<div style="color:var(--ink-2);font-size:.9375rem;line-height:1.6;'
+            f'max-width:66ch;margin-top:.5rem">{headline.detail}</div>',
+            unsafe_allow_html=True,
+        )
+    elif run.best is not None:
+        st.markdown(
+            f"**{run.best.model_name}** came out in front, but the run produced no finding worth "
+            "leading with. The **Models** page has the comparison."
+        )
+    else:
+        error_state(
+            "This run produced no usable model",
+            "Every candidate failed to train. The Models page lists what happened to each.",
+            "Check the Data page for unresolved quality problems, then try again with a "
+            "preprocessing pipeline built on the Preprocessing page.",
+        )
+
+    st.divider()
+
+    # Whether to believe it, before anything else about it.
+    if run.trust is not None:
+        st.markdown("### Why trust this?")
+        trust_panel(run.trust)
+
+    left, right = st.columns(2, gap="large")
+    with left:
+        st.markdown("### What drives the result")
+        if run.explanation is not None and run.explanation.importances:
+            for position, item in enumerate(run.explanation.top(5), start=1):
+                st.markdown(
+                    f'<div style="display:flex;gap:.7rem;align-items:baseline;padding:.28rem 0;'
+                    f'border-bottom:1px solid var(--border);font-size:.8125rem">'
+                    f'<span style="font-family:var(--mono);color:var(--ink-3)">{position}</span>'
+                    f'<span style="color:var(--ink);font-weight:600">{item.feature}</span>'
+                    f'<span style="margin-left:auto;color:var(--ink-3)">'
+                    f'{item.direction or ""}</span></div>',
+                    unsafe_allow_html=True,
+                )
+            st.caption(f"Measured by {run.explanation.method}. What the model relies on — which "
+                       "is not the same as what causes the outcome.")
+        else:
+            st.caption("No explanation was produced for this model.")
+
+    with right:
+        st.markdown("### What should happen next")
+        for position, recommendation in enumerate(run.recommendations[:3], start=1):
+            st.markdown(
+                f'<div style="padding:.35rem 0;border-bottom:1px solid var(--border);'
+                f'font-size:.8125rem;line-height:1.5">'
+                f'<span style="font-family:var(--mono);color:var(--ink-3)">{position}</span> '
+                f'<strong style="color:var(--ink)">{recommendation.action}</strong>'
+                f'<br><span style="color:var(--ink-3)">{recommendation.reason[:120]}</span></div>',
+                unsafe_allow_html=True,
+            )
+        if not run.recommendations:
+            st.caption("No recommendations were generated.")
+
+    if run.trust is not None:
+        st.divider()
+        st.markdown("### What could invalidate this")
+        known_unknowns(run.trust)
+        if run.trust.debt_items:
+            with st.expander(f"Assumption debt — {run.trust.assumption_debt}/100 "
+                             f"({run.trust.debt_band})"):
+                st.caption(
+                    "What would have to be true for the conclusion to hold, and has not been "
+                    "shown. Not a probability — a running list of what is still owed."
+                )
+                for item in run.trust.debt_items:
+                    st.markdown(f"- {item}")
+
+    st.divider()
+    links = st.columns([1, 1, 1, 1, 1, 1])
+    links[0].page_link("pages/6_Insights.py", label="Explore evidence →")
+    links[1].page_link("pages/13_Score.py", label="Score new data →")
+    links[2].page_link("pages/9_Report.py", label="Generate report →")
+    links[3].page_link("pages/5_Models.py", label="Review analysis →")
+    links[4].page_link("pages/10_Projects.py", label="Runs →")
+
     st.divider()
     left, right = st.columns([3, 2], gap="large")
     with left:
         st.markdown("### Data quality")
         quality_bars(quality_breakdown(profile))
-        if profile.quality_issues:
-            st.caption(f"{len(profile.quality_issues)} issue(s) — see the **Data** page to work through them.")
     with right:
         st.markdown("### Recent activity")
-        if state.runs:
-            for entry in reversed(state.runs[-5:]):
-                st.markdown(
-                    f'<div style="font-size:.8125rem;color:var(--ink-2);padding:.3rem 0;'
-                    f'border-bottom:1px solid var(--border)">'
-                    f'<strong style="color:var(--ink)">{entry.objective.task_type.value.replace("_", " ") if entry.objective else "run"}</strong>'
-                    f' · {len(entry.results)} model(s) · {entry.duration_s:.0f}s</div>',
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.caption("Nothing has run yet. Activity appears here once it has.")
+        for entry in reversed(state.runs[-5:]):
+            question = entry.objective.task_type.value.replace("_", " ") if entry.objective else "run"
+            model = entry.best.model_name if entry.best else "no model"
+            st.markdown(
+                f'<div style="font-size:.8125rem;color:var(--ink-2);padding:.3rem 0;'
+                f'border-bottom:1px solid var(--border)">'
+                f'<strong style="color:var(--ink)">{question}</strong> · {model} · '
+                f"{len(entry.results)} model(s) · {entry.duration_s:.0f}s</div>",
+                unsafe_allow_html=True,
+            )
+        if len(state.runs) >= 2:
+            st.page_link("pages/10_Projects.py", label="Compare two runs →")
     st.stop()
 
 

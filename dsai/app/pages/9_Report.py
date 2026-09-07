@@ -17,7 +17,7 @@ from dsai.app.workings import learned_parameters
 from dsai.app.state import workspace
 from dsai.reporting.builder import build_report
 from dsai.reporting.exporters import (
-    to_excel, to_html, to_json, to_markdown, to_pdf, to_python, write_charts,
+    export_audit_package, to_excel, to_html, to_json, to_markdown, to_pdf, to_python, write_charts,
 )
 from dsai.repro.provenance import build_manifest
 
@@ -197,6 +197,39 @@ with export_tab:
         "Business summary", to_markdown(run, "business", frame=frame),
         file_name=f"{stem}_business.md", mime="text/markdown", use_container_width=True,
     )
+
+    st.divider()
+    st.subheader("Audit package")
+    st.caption(
+        "Everything needed to check this analysis without the platform, in one archive: both "
+        "reports, the methodology, the model card, the data contract, the evidence ledger, the "
+        "trust assessment, the decision log, the manifest, the charts, runnable Python, and a "
+        "README naming what each file is for. Every file carries the same fingerprint."
+    )
+    if st.button("Build the audit package", use_container_width=True):
+        with st.status("Assembling…", expanded=False) as status:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "analysis"
+                written = export_audit_package(run, root, frame=frame)
+                failed = {k: v for k, v in written.items()
+                          if isinstance(v, str) and v.startswith(("failed", "not written"))}
+                archive = io.BytesIO()
+                with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+                    for path in sorted(root.rglob("*")):
+                        if path.is_file():
+                            bundle.write(path, arcname=str(path.relative_to(root.parent)))
+                st.session_state["_audit_zip"] = archive.getvalue()
+                st.session_state["_audit_failed"] = failed
+            status.update(label=f"{len(written) - len(failed)} file(s) written", state="complete")
+
+    if st.session_state.get("_audit_zip"):
+        st.download_button(
+            "Download the audit package (.zip)", st.session_state["_audit_zip"],
+            file_name=f"{stem}_audit_package.zip", mime="application/zip",
+            use_container_width=True,
+        )
+        for name, reason in (st.session_state.get("_audit_failed") or {}).items():
+            caveat(f"**{name}** could not be written — {reason}")
 
     st.divider()
     st.subheader("Charts and PDF")

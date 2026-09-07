@@ -10,6 +10,7 @@ from typing import Any
 
 import pandas as pd
 
+from dsai.engines.metrics import human_number
 from dsai.reporting.builder import Report, build_report
 from dsai.reporting.figures import to_png
 
@@ -521,6 +522,164 @@ def write_charts(run: Any, directory: str | Path,
         target.write_bytes(png)
         written[figure.key] = f"charts/{target.name}"
     return written
+
+
+def export_audit_package(run: Any, directory: str | Path, data_path: str = "your_data.csv",
+                         frame: pd.DataFrame | None = None) -> dict[str, str]:
+    """Everything needed to check this analysis without the platform.
+
+    One directory, one fingerprint, and a README naming what each file is for.
+    The point is that a reviewer — an auditor, a colleague, the analyst
+    themselves in six months — can reconstruct what was done and why without
+    asking anyone.
+    """
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    written = export_all(run, directory, data_path=data_path, frame=frame)
+
+    stem = f"{run.dataset_name}_{run.id}"
+    fingerprint = ""
+    try:
+        from dsai.repro.provenance import build_manifest, save_manifest
+
+        manifest = build_manifest(run)
+        fingerprint = manifest.fingerprint()
+        target = directory / "dataset_manifest.json"
+        save_manifest(manifest, target)
+        written["manifest"] = str(target)
+    except Exception as exc:
+        written["manifest"] = f"failed: {exc}"
+
+    for label, filename, builder in [
+        ("methodology", "methodology.md",
+         lambda: build_report(run, "technical", frame=frame, include_charts=False,
+                              include_methodology=True).to_markdown()),
+        ("model_card", "model_card.md", lambda: _model_card_markdown(run, frame)),
+    ]:
+        try:
+            (directory / filename).write_text(builder(), encoding="utf-8")
+            written[label] = str(directory / filename)
+        except Exception as exc:
+            written[label] = f"failed: {exc}"
+
+    for label, filename, payload in [
+        ("findings", "findings.json", [f.to_dict() for f in run.findings]),
+        ("recommendations", "recommendations.json", [r.to_dict() for r in run.recommendations]),
+        ("decision_log", "decision_log.json", [d.to_dict() for d in run.decisions]),
+        ("evidence", "evidence.json",
+         run.ledger.to_dict() if getattr(run, "ledger", None) is not None else {}),
+        ("trust", "trust.json", _trust_payload(run)),
+        ("contract", "data_contract.json",
+         run.contract.to_dict() if getattr(run, "contract", None) is not None else {}),
+    ]:
+        try:
+            (directory / filename).write_text(json.dumps(payload, indent=2, default=str),
+                                              encoding="utf-8")
+            written[label] = str(directory / filename)
+        except Exception as exc:
+            written[label] = f"failed: {exc}"
+
+    try:
+        (directory / "README.md").write_text(_audit_readme(run, stem, fingerprint, written),
+                                             encoding="utf-8")
+        written["readme"] = str(directory / "README.md")
+    except Exception as exc:
+        written["readme"] = f"failed: {exc}"
+    return written
+
+
+def _model_card_markdown(run: Any, frame: pd.DataFrame | None) -> str:
+    from dsai.reporting.model_card import build_model_card
+
+    return build_model_card(run, frame=frame).to_markdown()
+
+
+def _trust_payload(run: Any) -> dict[str, Any]:
+    trust = getattr(run, "trust", None)
+    if trust is None:
+        return {}
+    return {
+        "evidence_strength": trust.score,
+        "band": trust.band,
+        "verdict": trust.verdict,
+        "assumption_debt": trust.assumption_debt,
+        "debt_band": trust.debt_band,
+        "supporting": [f.statement for f in trust.supporting],
+        "reducing": [f.statement for f in trust.reducing],
+        "known_unknowns": trust.unknowns,
+        "debt_items": trust.debt_items,
+        "blocking": trust.blocking,
+        "note": "Evidence strength is a weighted summary of validation checks, not a "
+                "statistical confidence level.",
+    }
+
+
+def _audit_readme(run: Any, stem: str, fingerprint: str, written: dict[str, str]) -> str:
+    trust = getattr(run, "trust", None)
+    lines = [
+        f"# Analysis package — {run.dataset_name}", "",
+        f"Run `{run.id}` · fingerprint `{fingerprint}` · generated {run.created_at}", "",
+        "Everything in this directory describes one analysis. Two packages with the same "
+        "fingerprint came from the same dataset, objective, preprocessing, validation strategy, "
+        "seed and model, and should carry the same numbers.", "",
+    ]
+    if run.objective is not None:
+        lines += [f"**Question.** {run.objective.task_type.value.replace('_', ' ')}"
+                  + (f" on `{run.objective.target}`" if run.objective.target else ""), ""]
+    if run.best is not None and run.plan is not None:
+        lines += [f"**Selected model.** {run.best.model_name}, "
+                  f"{run.plan.primary_metric} = "
+                  f"{human_number(run.best.primary(run.plan.primary_metric))} "
+                  "on this dataset under the validation strategy used.", ""]
+    if trust is not None:
+        lines += [f"**Evidence strength.** {trust.score}/100 ({trust.band}). "
+                  f"Assumption debt {trust.assumption_debt}/100. "
+                  "Neither is a statistical confidence level.", ""]
+
+    lines += ["## What is in here", "", "| File | What it is |", "| --- | --- |"]
+    catalogue = [
+        (f"{stem}.html", "The report, self-contained, with interactive charts. Start here."),
+        (f"{stem}.md", "The same report as Markdown."),
+        (f"{stem}_business.md", "The management version — findings and actions, no methodology."),
+        (f"{stem}_methodology.html", "The report with the full workings included."),
+        ("methodology.md", "How it was run, the arithmetic behind every figure, and whether "
+                           "anything went wrong producing it."),
+        ("model_card.md", "What the model is for and — more importantly — what it is not for."),
+        ("data_contract.json", "What the analysis required of its data. Check new data against "
+                               "this before scoring."),
+        ("evidence.json", "Every claim's identifier and what supports it."),
+        ("trust.json", "Evidence strength, what supports and weakens it, and what this analysis "
+                       "cannot answer at all."),
+        ("findings.json", "The findings, with confidence and caveats."),
+        ("recommendations.json", "The recommended actions and what each rests on."),
+        ("decision_log.json", "Every automated decision, its reason, and the options rejected."),
+        ("dataset_manifest.json", "The reproducibility fingerprint and its inputs."),
+        (f"{stem}_reproduce.py", "Standalone Python that reproduces the analysis without this "
+                                 "platform."),
+        (f"{stem}.xlsx", "The tables as a workbook."),
+        ("charts/", "Every chart as a PNG."),
+    ]
+    for filename, description in catalogue:
+        lines.append(f"| `{filename}` | {description} |")
+
+    failed = {k: v for k, v in written.items() if isinstance(v, str) and v.startswith(("failed", "not written"))}
+    if failed:
+        lines += ["", "## Not written", "",
+                  "These could not be produced. The reason is given rather than the file being "
+                  "quietly absent.", ""]
+        lines += [f"- **{k}** — {v}" for k, v in failed.items()]
+
+    lines += [
+        "", "## How to read this", "",
+        "1. `" + f"{stem}.html" + "` for the analysis as written.",
+        "2. `trust.json` or the *Why trust this* section for whether it can carry a decision.",
+        "3. `model_card.md` before using the model on anything.",
+        "4. `methodology.md` to check the arithmetic.",
+        "5. `" + f"{stem}_reproduce.py" + "` to run it yourself.",
+        "", "Every relationship described in these files is an association. This is observational "
+        "data; nothing here establishes that changing one thing would change another.",
+    ]
+    return "\n".join(lines)
 
 
 def export_all(run: Any, directory: str | Path, data_path: str = "your_data.csv",

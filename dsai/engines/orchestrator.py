@@ -98,6 +98,15 @@ class AnalysisRun(JsonMixin):
     cluster_sweep: dict[str, Any] = field(default_factory=dict)
     #: Flagged rows with a reason each, when the objective was anomaly detection.
     anomalies: list[dict[str, Any]] = field(default_factory=list)
+    #: The plan as a reviewable brief, with a verdict on whether this data can
+    #: defensibly answer this question. Written before the expensive work.
+    brief: Any = None
+    #: What this analysis requires of its data, re-checked when new rows arrive.
+    contract: Any = None
+    #: How much weight the result can carry, and what is holding it up.
+    trust: Any = None
+    #: Every claim's supporting evidence, with identifiers that survive export.
+    ledger: Any = None
 
     findings: list[Finding] = field(default_factory=list)
     recommendations: list[Recommendation] = field(default_factory=list)
@@ -211,6 +220,25 @@ class AIDataScientist:
         for warning in run.plan.warnings:
             run.trace.add(warning, status="warning")
             run.warnings.append(warning)
+
+        # The brief and the contract are written before the expensive work, so
+        # a reader can decide whether it is worth running — and so the same
+        # requirements can be checked again when new data arrives to be scored.
+        with run.trace.start("Writing the analysis brief") as step:
+            from dsai.engines.brief import build_brief, build_contract
+
+            run.brief = build_brief(run.profile, run.objective, run.plan, run.context,
+                                    self._typed_frame)
+            run.contract = build_contract(run.profile, run.objective, self._typed_frame)
+            step.update(f"{run.brief.verdict_label.lower()}; "
+                        f"{len(run.contract.checks)} data requirement(s) checked")
+        if run.brief.verdict == "unsuitable":
+            for reason in run.brief.verdict_reasons:
+                run.trace.add(reason, status="warning")
+        for check in run.contract.checks:
+            if not check.passed:
+                run.trace.add(f"Data contract: {check.requirement} — {check.detail}",
+                              status="warning")
 
         with run.trace.start("Designing the preprocessing pipeline") as step:
             model_spec = None
@@ -350,6 +378,17 @@ class AIDataScientist:
 
         run.status = "complete"
         run.duration_s = run.trace.total_seconds
+        # Assembled last, from the findings and checks the engines produced, so
+        # they cannot disagree with what the report says.
+        with run.trace.start("Assessing how far to trust this") as step:
+            from dsai.core.evidence import build_ledger
+            from dsai.engines.trust import assess_trust
+
+            run.trust = assess_trust(run)
+            run.ledger = build_ledger(run)
+            step.update(f"evidence strength {run.trust.score}/100 ({run.trust.band}); "
+                        f"{len(run.ledger.items)} evidence item(s)")
+
         run.trace.add("Analysis complete", detail=run.summary())
         return run
 
@@ -572,7 +611,12 @@ class AIDataScientist:
         with run.trace.start("Running model diagnostics"):
             predictions = model.predict(sample)
             # Kept so residual and predicted-vs-actual charts can be drawn later
-            # without refitting or re-splitting.
+            # without refitting or re-splitting. The index goes with them so
+            # errors can be joined back to the rows they came from — which is
+            # what subgroup performance needs.
+            run.best.extras["holdout_index"] = [
+                v.item() if hasattr(v, "item") else v for v in sample.index
+            ]
             if run.objective.task_type is TaskType.REGRESSION:
                 run.best.extras["holdout_actual"] = [float(v) for v in np.asarray(sample_y, dtype=float)]
             else:
