@@ -45,6 +45,9 @@ SECTIONS = {
             _page(PAGES / "5_Models.py", "5 · Models"),
             _page(PAGES / "6_Insights.py", "6 · Insights"),
             _page(PAGES / "7_Recommendations.py", "7 · Recommendations"),
+            # Training a model and never using it is where most analyses stop
+            # short of being worth anything. This is the other half.
+            _page(PAGES / "13_Score.py", "8 · Score new data"),
         ],
         "Investigate": [
             _page(PAGES / "8_Ask.py", "Ask a question"),

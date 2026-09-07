@@ -294,6 +294,34 @@ class PreprocessingPipeline(JsonMixin):
             stages.append(("zz_coerce_numeric", STEPS.get("coerce_numeric").build()))
         return Pipeline(stages) if stages else None
 
+    def fit_transform_frame(self, frame: pd.DataFrame,
+                            target: pd.Series | None = None) -> pd.DataFrame:
+        """Apply the whole pipeline to a frame, fitted on all of it.
+
+        This is for *getting the cleaned data out* — handing it on, or checking
+        the transformations against what you know about the data. It is
+        deliberately not how modelling works: there, the column steps are
+        refitted inside each cross-validation fold so no fold can learn from the
+        rows it will be scored on. Fitting on everything here is correct because
+        nothing is being scored; it would be leakage if anything were.
+        """
+        working = PreprocessingPipeline("export", copy.deepcopy(self.steps))
+        result, _ = working.apply_row_steps(frame)
+        aligned = target.loc[result.index] if target is not None else None
+
+        compiled = working.build_sklearn_pipeline()
+        if compiled is None:
+            return result
+        transformed = compiled.fit_transform(result, aligned)
+        if not isinstance(transformed, pd.DataFrame):
+            names = None
+            try:
+                names = list(compiled.get_feature_names_out())
+            except Exception:
+                pass
+            transformed = pd.DataFrame(transformed, index=result.index, columns=names)
+        return transformed
+
     def preview(self, frame: pd.DataFrame, target: pd.Series | None = None,
                 up_to: str | None = None, n_rows: int = 20) -> dict[str, Any]:
         """Show what the pipeline does to a sample, step by step.

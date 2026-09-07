@@ -114,4 +114,7 @@ def regression_run():
         BusinessContext(description="water instrumentation customers", currency="ZAR"),
         RunSettings(max_models=3, time_budget="fast"), source,
     )
+    # The fitted model belongs to the engine that trained it, so the engine has
+    # to travel with the run for anything that wants to score new rows.
+    run._engine = engine
     return run, engine._typed_frame

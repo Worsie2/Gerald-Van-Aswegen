@@ -77,6 +77,20 @@ def main(argv: list[str] | None = None) -> int:
     steps_parser = subparsers.add_parser("steps", help="Browse the preprocessing catalogue.")
     steps_parser.add_argument("--category")
 
+    predict_parser = subparsers.add_parser(
+        "predict",
+        help="Train on one dataset and score another, in one command.",
+    )
+    predict_parser.add_argument("path", help="The data to train on.")
+    predict_parser.add_argument("new_data", help="The data to score.")
+    predict_parser.add_argument("--target", required=True, help="The column to predict.")
+    predict_parser.add_argument("--output", default="predictions.csv",
+                                help="Where to write the predictions.")
+    predict_parser.add_argument("--keep", default="",
+                                help="Comma-separated columns to carry into the output, so the "
+                                     "predictions can be joined back onto your own records.")
+    predict_parser.add_argument("--max-models", type=int, default=6)
+
     subparsers.add_parser("app", help="Launch the workspace UI.")
     subparsers.add_parser(
         "doctor",
@@ -95,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         "models": _models,
         "steps": _steps,
         "app": _app,
+        "predict": _predict,
         "doctor": _doctor,
         "version": _version,
     }[args.command]
@@ -414,4 +429,63 @@ def _version(args) -> int:
             pass
     else:
         print("git         not a checkout — this is an installed copy, not a working tree")
+    return 0
+
+
+def _predict(args) -> int:
+    """Train on one file, score another, write a CSV.
+
+    The whole point of a model is to be used on rows nobody has seen. This is
+    that, in one command, with the schema and drift checks the workspace does —
+    because a prediction on data the model does not recognise is worse than no
+    prediction, and a script that silently produced one would be worse still.
+    """
+    from dsai.core.schema import BusinessContext
+    from dsai.engines.orchestrator import AIDataScientist, RunSettings
+    from dsai.engines.scoring import score_new_data
+
+    frame, source = _load(args.path)
+    print(f"Training on {args.path} — {len(frame):,} rows, {frame.shape[1]} columns")
+
+    scientist = AIDataScientist()
+    run = scientist.analyse(
+        frame, Path(args.path).stem, BusinessContext(),
+        RunSettings(max_models=args.max_models, time_budget="balanced"), source,
+    )
+    if run.best is None:
+        print("No model trained successfully, so there is nothing to predict with.",
+              file=sys.stderr)
+        return 1
+    from dsai.engines.metrics import human_number
+
+    metric = run.plan.primary_metric if run.plan else ""
+    print(f"Selected {run.best.model_name} "
+          f"({metric} = {human_number(run.best.primary(metric))} on held-out rows)")
+
+    new_frame, _ = _load(args.new_data)
+    print(f"Scoring {args.new_data} — {len(new_frame):,} rows")
+
+    model = scientist.fitted_model(run)
+    keep = [c.strip() for c in args.keep.split(",") if c.strip()]
+    result = score_new_data(model, new_frame, run.best,
+                            training_frame=scientist._typed_frame, keep_columns=keep)
+
+    if not result.schema.ok:
+        print("\nThis data cannot be scored by this model.", file=sys.stderr)
+        print("Absent and required: " + ", ".join(result.schema.missing), file=sys.stderr)
+        return 1
+
+    for note in result.schema.notes:
+        print(f"  ! {note}")
+    for caveat in result.caveats:
+        print(f"  ! {caveat}")
+
+    result.predictions.to_csv(args.output, index=False)
+    print(f"\nWrote {len(result.predictions):,} prediction(s) to {args.output}")
+    if not result.drift.empty:
+        moved = result.drift[~result.drift["Reading"].str.contains("unchanged", na=False)]
+        if len(moved):
+            print(f"\n{len(moved)} column(s) have moved since training:")
+            for row in moved.head(6).itertuples(index=False):
+                print(f"   {row.Column:24} {row.Reading}")
     return 0

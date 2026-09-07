@@ -25,14 +25,17 @@ UPLOAD → UNDERSTAND → CONTEXT → QUALITY → PREPROCESS → CHOOSE METHODS
 | **15+ statistical tests** | each reporting assumptions, effect size and whether the difference matters in practice |
 | **6 export formats** | Markdown, HTML, Excel, JSON, runnable Python, PDF — all carrying the charts |
 | **3 ways to work** | AI automatic, AI assisted, manual/expert — one engine underneath |
+| **Scoring on new data** | with schema and drift checks, because a model predicts just as confidently on data it has never seen |
 
 ```bash
 pip install -e ".[full]"
 
 dsai profile customers.csv
 dsai analyse customers.csv --target annual_spend --export ./reports
+dsai predict customers.csv new_customers.csv --target annual_spend --keep customer_id
 dsai ask customers.csv "which customers are most valuable?"
 dsai app                     # the workspace UI
+dsai doctor                  # what is wrong with this install, and the fix
 ```
 
 ```python

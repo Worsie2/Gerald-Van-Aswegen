@@ -493,6 +493,49 @@ with preview_tab:
         st.markdown(f"**Result:** {preview['final_shape'][0]:,} rows × {preview['final_shape'][1]} columns")
         dataframe(preview["sample"].head(15).round(4))
 
+        # The cleaned data is a deliverable in its own right — a lot of the value
+        # of this page is the tidied dataset, and until now there was no way to
+        # get it out of the app.
+        st.divider()
+        st.markdown("**Take the cleaned data with you**")
+        st.caption(
+            "The dataset with this pipeline applied, fitted on all the rows. Useful for handing "
+            "on, or for checking the transformations against your own knowledge of the data. "
+            "Note the difference from what the analysis does: for modelling, these steps are "
+            "refitted inside each cross-validation fold, so the numbers used there come from "
+            "training rows only."
+        )
+        export = st.columns([1, 1, 2])
+        try:
+            cleaned = pipeline.fit_transform_frame(features, target)
+        except Exception as exc:
+            cleaned = None
+            caveat(f"The pipeline could not be applied to the whole dataset: {exc}")
+        if cleaned is not None:
+            import io as _io
+
+            buffer = _io.StringIO()
+            cleaned.to_csv(buffer, index=False)
+            export[0].download_button(
+                f"Cleaned data (.csv)", buffer.getvalue(),
+                file_name=f"{state.dataset_name}_cleaned.csv", mime="text/csv",
+                use_container_width=True,
+            )
+            try:
+                parquet = _io.BytesIO()
+                cleaned.to_parquet(parquet, index=False)
+                export[1].download_button(
+                    "Cleaned data (.parquet)", parquet.getvalue(),
+                    file_name=f"{state.dataset_name}_cleaned.parquet",
+                    mime="application/octet-stream", use_container_width=True,
+                )
+            except Exception:
+                export[1].caption("Parquet needs `pyarrow`.")
+            export[2].caption(
+                f"{len(cleaned):,} rows × {cleaned.shape[1]} columns "
+                f"(from {len(features):,} × {features.shape[1]})."
+            )
+
         st.subheader("Leakage control")
         report = pipeline.leakage_report()
         inference(report["explanation"], label="Leakage control")
