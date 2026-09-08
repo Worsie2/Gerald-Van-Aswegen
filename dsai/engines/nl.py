@@ -462,16 +462,22 @@ def _plan_correlate(intent, text, profile, last_run, context) -> Intent:
     columns = [c for c in intent.columns if profile.columns[c].is_numeric] or profile.numeric_columns
     intent.columns = columns
     intent.estimated_cost = "low"
+    if len(columns) < 2:
+        # A real, blocking ambiguity: there is nothing to correlate.
+        intent.clarification = "There are not two numeric variables here to correlate."
+        return intent
     intent.plan_preview = [
         f"Compute Pearson, Spearman and Kendall correlations across {len(columns)} numeric variable(s)",
         "Report the coefficient, sample size and p-value for each pair",
         "Flag pairs where the rank correlation is much stronger than the linear one — that is curvature",
         "Compute VIF to show which variables are carrying the same information",
     ]
-    intent.clarification = (
-        "Correlation shows what moves together. It cannot show what causes what — a third "
-        "variable, reverse causation or coincidence produce the same number."
-    )
+    # Not intent.clarification: that field gates whether the Ask page treats
+    # this as answerable right now (see the "and not intent.clarification"
+    # check in 8_Ask.py). The correlation-is-not-causation reminder belongs
+    # here as something always true of the answer, not a reason to withhold
+    # it -- and _correlation_answer() already says exactly this alongside the
+    # numbers, where it is actually read.
     return intent
 
 

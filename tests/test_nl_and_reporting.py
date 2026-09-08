@@ -117,6 +117,27 @@ def test_statistical_questions_are_answered_without_a_model(question_frame):
     assert "p =" in result["answer"] or "significant" in result["answer"].lower()
 
 
+def test_correlation_questions_are_actually_answered(question_frame):
+    """The Ask page only computes describe/correlate/test/rank answers when
+    `not intent.clarification` -- so a planner that always fills in
+    `clarification` as a permanent caveat (rather than a real, blocking
+    ambiguity) silently suppresses its own answer. _plan_correlate did
+    exactly that: 'correlation is not causation' is true of every answer,
+    not a reason to withhold it, and _correlation_answer() already says so
+    in the text the page actually shows."""
+    profile, typed = profile_dataset(question_frame)
+    intent = parse_command("what is the relationship between income and annual_spend?", profile)
+    assert intent.action == "correlate"
+    assert not intent.clarification, (
+        "a permanent disclaimer here blocks the Ask page from ever computing an answer"
+    )
+
+    result = answer_question("what is the relationship between income and annual_spend?",
+                             typed, profile)
+    assert result.get("answer"), "no answer was computed"
+    assert "correlat" in result["answer"].lower() or "r =" in result["answer"]
+
+
 def test_intent_converts_into_a_runnable_objective(question_frame):
     profile, _ = profile_dataset(question_frame)
     intent = parse_command("create four customer segments", profile)

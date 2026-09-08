@@ -80,7 +80,11 @@ if intent is not None:
 
         if intent.action in {"describe", "correlate", "test", "rank"} and not intent.clarification:
             frame = state.typed_frame if state.typed_frame is not None else state.frame
-            result = answer_question(question, frame, state.profile, state.context, state.run)
+            # Not `question`: chat_input() only returns a value on the exact
+            # rerun a message is submitted. This code runs on the *next*
+            # rerun (after the st.rerun() above), where `question` is back to
+            # None -- intent.original is what was actually asked.
+            result = answer_question(intent.original, frame, state.profile, state.context, state.run)
             if result.get("filters"):
                 st.caption("Filters applied: " + "; ".join(result["filters"]))
             if result.get("answer"):
