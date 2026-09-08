@@ -301,6 +301,138 @@ class FuzzyCMeans(BaseEstimator, ClusterMixin):
         return np.argmax(inv / inv.sum(axis=1, keepdims=True), axis=1)
 
 
+class LatentClassAnalysis(BaseEstimator, ClusterMixin):
+    """Latent Class Analysis: a mixture of independent Bernoulli items.
+
+    This is not a distance-based clustering method — it fits P(item = 1 |
+    class) for every indicator, for every class, by EM, on the assumption
+    that within a class the items are independent (the "local independence"
+    assumption LCA is built on). What K-Means calls a centroid, LCA calls a
+    class's item-response profile: "63% of class 2 has service_tier_premium",
+    not "class 2's average is 0.63 standard deviations from the mean".
+
+    LCA needs binary or categorical indicators, not continuous measurements —
+    the preprocessing pipeline one-hot-encodes categoricals into 0/1 columns
+    the same way for every clustering model, but does not know to leave
+    continuous columns out for this one. Rather than fail on them, a column
+    that is not already binary is median-split at fit time (the threshold is
+    stored and reused at predict time) — a real, standard way to bring a
+    continuous item into an LCA, but a choice made for you, not a neutral
+    default. It shows up in the model's limitations for exactly that reason.
+    """
+
+    def __init__(self, n_clusters: int = 3, n_init: int = 10, max_iter: int = 200,
+                 tol: float = 1e-4, random_state: int = 42):
+        self.n_clusters = n_clusters
+        self.n_init = n_init
+        self.max_iter = max_iter
+        self.tol = tol
+        self.random_state = random_state
+
+    def _binarize(self, X: np.ndarray, fitting: bool) -> np.ndarray:
+        X = np.asarray(X, dtype=float)
+        if fitting:
+            is_binary = np.array([set(np.unique(col)) <= {0.0, 1.0} for col in X.T])
+            thresholds = np.where(is_binary, 0.5, np.median(X, axis=0))
+            self.thresholds_ = thresholds
+            self.was_binary_ = is_binary
+        return (X > self.thresholds_).astype(float)
+
+    @staticmethod
+    def _log_likelihood(Xb: np.ndarray, log_prior: np.ndarray,
+                        log_theta: np.ndarray, log_one_minus_theta: np.ndarray) -> np.ndarray:
+        # (n, K): log P(row, class=k) for every row and class at once.
+        return log_prior[None, :] + Xb @ log_theta.T + (1.0 - Xb) @ log_one_minus_theta.T
+
+    def _fit_once(self, Xb: np.ndarray, rng: np.random.Generator):
+        from scipy.special import logsumexp
+
+        n, j = Xb.shape
+        k = self.n_clusters
+        eps = 1e-6
+        theta = rng.uniform(0.25, 0.75, size=(k, j))
+        prior = np.full(k, 1.0 / k)
+        prev_ll = -np.inf
+
+        for iteration in range(1, self.max_iter + 1):
+            theta_c = np.clip(theta, eps, 1 - eps)
+            log_joint = self._log_likelihood(Xb, np.log(prior), np.log(theta_c), np.log1p(-theta_c))
+            log_norm = logsumexp(log_joint, axis=1)
+            total_ll = float(log_norm.sum())
+            resp = np.exp(log_joint - log_norm[:, None])
+
+            weight = resp.sum(axis=0)
+            prior = np.maximum(weight, eps) / n
+            theta = (resp.T @ Xb) / np.maximum(weight, eps)[:, None]
+
+            if total_ll - prev_ll < self.tol * abs(prev_ll or 1.0):
+                prev_ll = total_ll
+                break
+            prev_ll = total_ll
+
+        return prior, theta, resp, prev_ll, iteration
+
+    def fit(self, X, y=None):
+        Xb = self._binarize(X, fitting=True)
+        rng = np.random.default_rng(self.random_state)
+
+        best = None
+        for _ in range(max(1, self.n_init)):
+            result = self._fit_once(Xb, rng)
+            if best is None or result[3] > best[3]:
+                best = result
+
+        prior, theta, resp, total_ll, n_iter = best
+        order = np.argsort(-prior)  # largest class first, so labels read consistently run to run
+        self.class_prior_ = prior[order]
+        self.item_probs_ = theta[order]
+        self.responsibilities_ = resp[:, order]
+        self.labels_ = np.argmax(self.responsibilities_, axis=1)
+        self.lower_bound_ = total_ll / len(Xb)
+        self.n_iter_ = n_iter
+        self.n_features_in_ = Xb.shape[1]
+        return self
+
+    def fit_predict(self, X, y=None):
+        return self.fit(X).labels_
+
+    def _responsibilities(self, X) -> np.ndarray:
+        from scipy.special import logsumexp
+
+        Xb = self._binarize(X, fitting=False)
+        theta_c = np.clip(self.item_probs_, 1e-6, 1 - 1e-6)
+        log_joint = self._log_likelihood(Xb, np.log(self.class_prior_), np.log(theta_c), np.log1p(-theta_c))
+        return np.exp(log_joint - logsumexp(log_joint, axis=1)[:, None])
+
+    def predict(self, X):
+        return np.argmax(self._responsibilities(X), axis=1)
+
+    def predict_proba(self, X):
+        return self._responsibilities(X)
+
+    def score(self, X, y=None) -> float:
+        """Average per-row log-likelihood, the same quantity sklearn's
+        GaussianMixture.score returns — what bic()/aic() are built from."""
+        from scipy.special import logsumexp
+
+        Xb = self._binarize(X, fitting=False)
+        theta_c = np.clip(self.item_probs_, 1e-6, 1 - 1e-6)
+        log_joint = self._log_likelihood(Xb, np.log(self.class_prior_), np.log(theta_c), np.log1p(-theta_c))
+        return float(logsumexp(log_joint, axis=1).mean())
+
+    def _n_parameters(self) -> int:
+        k, j = self.item_probs_.shape
+        return (k - 1) + k * j  # class priors (sum to 1) + one item-response rate per class per item
+
+    def bic(self, X) -> float:
+        n = len(np.asarray(X))
+        return -2.0 * self.score(X) * n + self._n_parameters() * np.log(n)
+
+    def aic(self, X) -> float:
+        n = len(np.asarray(X))
+        return -2.0 * self.score(X) * n + 2.0 * self._n_parameters()
+
+
 # --------------------------------------------------------------------------
 # anomaly detection adapters
 # --------------------------------------------------------------------------

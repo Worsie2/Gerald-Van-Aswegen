@@ -253,6 +253,44 @@ SPECS = [
         tags=["soft_clustering"],
     ),
     spec(
+        key="latent_class_analysis",
+        name="Latent Class Analysis",
+        category="clustering",
+        family="probabilistic",
+        task_types=CLU,
+        builder=lazy("dsai.registry.adapters:LatentClassAnalysis"),
+        module="sklearn",
+        requires_scaling=False,
+        interpretability=MODERATE,
+        cost=Cost.MEDIUM,
+        assumptions=[
+            "Indicators are binary or categorical, not continuous measurements",
+            "Items are independent of each other once class membership is known "
+            "(local independence) — the classes are what explain any correlation between them",
+        ],
+        advantages=[
+            "Each class is read directly as a set of item probabilities, not a distance",
+            "Soft membership — a row's probability of belonging to each class, not a hard assignment",
+            "AIC/BIC give a principled way to choose the number of classes",
+        ],
+        limitations=[
+            "A continuous column is median-split into two levels before fitting — a real "
+            "technique, but a modelling choice made for you, not a neutral default",
+            "Assumes local independence; strongly correlated items within a class inflate "
+            "that class's apparent size",
+            "Can converge to a poor local optimum — more restarts (n_init) trade time for reliability",
+        ],
+        good_for=["survey or yes/no style indicators", "segments defined by response patterns, not distance"],
+        hyperparameters=[
+            hp("n_clusters", "int", 3, 2, 10, description="Number of latent classes."),
+            hp("n_init", "int", 10, 1, 30, tune=False, description="EM restarts; keeps the best by likelihood."),
+            hp("random_state", "fixed", 42, tune=False),
+        ],
+        metrics=METRICS + ["aic", "bic"],
+        min_rows=100,
+        tags=["soft_clustering", "categorical"],
+    ),
+    spec(
         key="fuzzy_cmeans",
         name="Fuzzy C-Means",
         category="clustering",

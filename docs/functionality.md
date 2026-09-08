@@ -15,7 +15,7 @@ model, trains and cross-validates a field of them, compares them on more than th
 headline score, explains the winner, checks its own conclusions, says what to do,
 and then lets the resulting model score new data.
 
-Roughly 33,500 lines of Python across 94 modules, with 252 tests.
+Roughly 33,800 lines of Python across 94 modules, with 290 tests.
 
 Stack: Python 3.11, pandas, scikit-learn, scipy, statsmodels, XGBoost, LightGBM,
 mlxtend, Plotly, Streamlit. Runs entirely locally; no data leaves the machine and
@@ -196,7 +196,7 @@ comparison; and export of the cleaned dataset as CSV or Parquet.
 
 ## 7. Model selection and the tournament
 
-**Registry: 111 algorithms, 108 available in a standard install.**
+**Registry: 112 algorithms, 109 available in a standard install.**
 
 | Category | Count |
 |---|---|
